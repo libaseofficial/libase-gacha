@@ -1,12 +1,14 @@
 import express from 'express';
+import cors from 'cors';
 import Database from 'better-sqlite3';
 
 const app = express();
 const db = new Database('./gacha.db');
+const PORT = process.env.PORT || 3000;
 
+app.use(cors());
 app.use(express.json());
 
-// DB
 db.exec(`
 CREATE TABLE IF NOT EXISTS spin_tickets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +25,6 @@ CREATE TABLE IF NOT EXISTS rewards (
 );
 `);
 
-// 初期データ
 const count = db.prepare('SELECT COUNT(*) as c FROM rewards').get().c;
 
 if (count === 0) {
@@ -37,7 +38,6 @@ if (count === 0) {
     .run('無料', 5, 5);
 }
 
-// 抽選
 function draw() {
   const rewards = db.prepare('SELECT * FROM rewards WHERE stock > 0').all();
   const total = rewards.reduce((sum, r) => sum + r.probability, 0);
@@ -48,9 +48,14 @@ function draw() {
     if (rand < r.probability) return r;
     rand -= r.probability;
   }
+
+  return rewards[rewards.length - 1];
 }
 
-// verify
+app.get('/', (_req, res) => {
+  res.send('LIBASE Gacha Server is running');
+});
+
 app.post('/verify', (req, res) => {
   const { customerId, coupon } = req.body;
 
@@ -64,7 +69,6 @@ app.post('/verify', (req, res) => {
   }
 });
 
-// spin
 app.post('/spin', (req, res) => {
   const { customerId, coupon } = req.body;
 
@@ -86,8 +90,6 @@ app.post('/spin', (req, res) => {
 
   res.json({ ok: true, reward: reward.name });
 });
-
-const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`Gacha running on port ${PORT}`);
