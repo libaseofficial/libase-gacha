@@ -12,7 +12,7 @@ app.use(express.json());
 const SHOPIFY_SHOP = 's62nix-7r.myshopify.com';
 const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
-let ACCESS_TOKEN = '';
+let ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN || '';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS spin_tickets (
