@@ -87,6 +87,8 @@ app.post('/spin', (req, res) => {
   res.json({ ok: true, reward: reward.name });
 });
 
-app.listen(3000, () => {
-  console.log('Gacha running');
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Gacha running on port ${PORT}`);
 });
