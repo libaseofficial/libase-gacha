@@ -1,0 +1,14 @@
+{
+  "name": "libase-gacha",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "express": "^5.2.1",
+    "helmet": "^8.1.0"
+  }
+}
