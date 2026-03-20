@@ -66,7 +66,7 @@ app.get('/callback', async (req, res) => {
   });
   const data = await response.json();
   ACCESS_TOKEN = data.access_token;
-  res.send('インストール完了。トークン: ' + ACCESS_TOKEN);
+  res.send('インストール完了しました。このページを閉じてください。');
 });
 
 // ポイント残高取得
