@@ -90,16 +90,28 @@ app.post('/spin', async (req, res) => {
 
   if (!ticket) return res.json({ ok: false });
 
-  // Shopify APIでコード確認
-  if (ACCESS_TOKEN) {
-    const shopifyRes = await fetch(
-      `https://${SHOPIFY_SHOP}/admin/api/2026-01/discount_codes/lookup.json?code=${coupon}`,
-      { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
-    );
-    if (!shopifyRes.ok) {
-      return res.json({ ok: false, message: '無効なコードです' });
-    }
+  // Shopify APIでコード確認＆削除
+if (ACCESS_TOKEN) {
+  const shopifyRes = await fetch(
+    `https://${SHOPIFY_SHOP}/admin/api/2026-01/discount_codes/lookup.json?code=${coupon}`,
+    { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
+  );
+  if (!shopifyRes.ok) {
+    return res.json({ ok: false, message: '無効なコードです' });
   }
+  
+  const shopifyData = await shopifyRes.json();
+  const { id, price_rule_id } = shopifyData.discount_code;
+  
+  // 使用済みにするためクーポンを削除
+  await fetch(
+    `https://${SHOPIFY_SHOP}/admin/api/2026-01/price_rules/${price_rule_id}/discount_codes/${id}.json`,
+    { 
+      method: 'DELETE',
+      headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN }
+    }
+  );
+}
 
   const reward = draw();
   db.prepare('UPDATE rewards SET stock = stock - 1 WHERE id = ?').run(reward.id);
