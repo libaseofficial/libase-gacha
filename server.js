@@ -52,13 +52,11 @@ app.get('/', (_req, res) => {
   res.send('LIBASE Gacha Server is running');
 });
 
-// インストール用
 app.get('/install', (_req, res) => {
   const url = `https://${SHOPIFY_SHOP}/admin/oauth/authorize?client_id=${CLIENT_ID}&scope=read_price_rules,write_price_rules,read_discounts,write_discounts&redirect_uri=https://libase-gacha.onrender.com/callback&state=gacha123`;
   res.redirect(url);
 });
 
-// コールバック用
 app.get('/callback', async (req, res) => {
   const { code } = req.query;
   const response = await fetch(`https://${SHOPIFY_SHOP}/admin/oauth/access_token`, {
@@ -69,6 +67,28 @@ app.get('/callback', async (req, res) => {
   const data = await response.json();
   ACCESS_TOKEN = data.access_token;
   res.send('インストール完了。トークン: ' + ACCESS_TOKEN);
+});
+
+// ポイント残高取得
+app.get('/points', async (req, res) => {
+  const { customerId } = req.query;
+
+  if (!customerId || !ACCESS_TOKEN) {
+    return res.json({ ok: false, points: 0 });
+  }
+
+  try {
+    const response = await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/2025-01/customers/${customerId}/metafields.json`,
+      { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
+    );
+    const data = await response.json();
+    const pointField = data.metafields.find(m => m.key === 'point');
+    const points = pointField ? parseInt(pointField.value) : 0;
+    res.json({ ok: true, points });
+  } catch (e) {
+    res.json({ ok: false, points: 0 });
+  }
 });
 
 app.post('/verify', (req, res) => {
@@ -90,28 +110,24 @@ app.post('/spin', async (req, res) => {
 
   if (!ticket) return res.json({ ok: false });
 
-  // Shopify APIでコード確認＆削除
-if (ACCESS_TOKEN) {
-  const shopifyRes = await fetch(
-    `https://${SHOPIFY_SHOP}/admin/api/2026-01/discount_codes/lookup.json?code=${coupon}`,
-    { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
-  );
-  if (!shopifyRes.ok) {
-    return res.json({ ok: false, message: '無効なコードです' });
-  }
-  
-  const shopifyData = await shopifyRes.json();
-  const { id, price_rule_id } = shopifyData.discount_code;
-  
-  // 使用済みにするためクーポンを削除
-  await fetch(
-    `https://${SHOPIFY_SHOP}/admin/api/2026-01/price_rules/${price_rule_id}/discount_codes/${id}.json`,
-    { 
-      method: 'DELETE',
-      headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN }
+  if (ACCESS_TOKEN) {
+    const shopifyRes = await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/2025-01/discount_codes/lookup.json?code=${coupon}`,
+      { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
+    );
+    if (!shopifyRes.ok) {
+      return res.json({ ok: false, message: '無効なコードです' });
     }
-  );
-}
+    const shopifyData = await shopifyRes.json();
+    const { id, price_rule_id } = shopifyData.discount_code;
+    await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules/${price_rule_id}/discount_codes/${id}.json`,
+      {
+        method: 'DELETE',
+        headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN }
+      }
+    );
+  }
 
   const reward = draw();
   db.prepare('UPDATE rewards SET stock = stock - 1 WHERE id = ?').run(reward.id);
