@@ -83,7 +83,7 @@ app.get('/points', async (req, res) => {
       { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
     );
     const data = await response.json();
-    const pointField = data.metafields.find(m => m.key === 'point');
+    const pointField = data.metafields.find(m => m.namespace === 'poingpong' && m.key === 'points_after_change');
     const points = pointField ? parseInt(pointField.value) : 0;
     res.json({ ok: true, points });
   } catch (e) {
