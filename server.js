@@ -1,52 +1,28 @@
 import express from 'express';
 import cors from 'cors';
-import Database from 'better-sqlite3';
+import pkg from 'pg';
+const { Pool } = pkg;
 
 const app = express();
-const db = new Database('./gacha.db');
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 const SHOPIFY_SHOP = 's62nix-7r.myshopify.com';
 const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 let ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN || '';
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS spin_tickets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id TEXT,
-  coupon_code TEXT UNIQUE,
-  status TEXT DEFAULT 'verified'
-);
-
-CREATE TABLE IF NOT EXISTS rewards (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT,
-  probability INTEGER,
-  stock INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS gacha_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id TEXT,
-  reward_name TEXT,
-  points_used INTEGER DEFAULT 500,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-`);
-
-const count = db.prepare('SELECT COUNT(*) as c FROM rewards').get().c;
-if (count === 0) {
-  db.prepare('INSERT INTO rewards (name, probability, stock) VALUES (?, ?, ?)').run('500円OFF', 70, 100);
-  db.prepare('INSERT INTO rewards (name, probability, stock) VALUES (?, ?, ?)').run('1000円OFF', 25, 50);
-  db.prepare('INSERT INTO rewards (name, probability, stock) VALUES (?, ?, ?)').run('無料', 5, 5);
-}
-
-function draw() {
-  const rewards = db.prepare('SELECT * FROM rewards WHERE stock > 0').all();
+async function draw() {
+  const result = await pool.query('SELECT * FROM rewards WHERE stock > 0');
+  const rewards = result.rows;
+  if (rewards.length === 0) return null;
   const total = rewards.reduce((sum, r) => sum + r.probability, 0);
   let rand = Math.random() * total;
   for (const r of rewards) {
@@ -61,7 +37,7 @@ app.get('/', (_req, res) => {
 });
 
 app.get('/install', (_req, res) => {
-  const url = `https://${SHOPIFY_SHOP}/admin/oauth/authorize?client_id=${CLIENT_ID}&scope=read_price_rules,write_price_rules,read_discounts,write_discounts&redirect_uri=https://libase-gacha.onrender.com/callback&state=gacha123`;
+  const url = `https://${SHOPIFY_SHOP}/admin/oauth/authorize?client_id=${CLIENT_ID}&scope=read_price_rules,write_price_rules,read_discounts,write_discounts,read_customers&redirect_uri=https://libase-gacha.onrender.com/callback&state=gacha123`;
   res.redirect(url);
 });
 
@@ -79,51 +55,46 @@ app.get('/callback', async (req, res) => {
 
 app.get('/points', async (req, res) => {
   const { customerId } = req.query;
-
-  console.log('points called, customerId:', customerId);
-  console.log('ACCESS_TOKEN exists:', !!ACCESS_TOKEN);
-
   if (!customerId || !ACCESS_TOKEN) {
-    console.log('missing customerId or ACCESS_TOKEN');
     return res.json({ ok: false, points: 0 });
   }
-
   try {
     const response = await fetch(
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/customers/${customerId}/metafields.json`,
       { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
     );
-    console.log('shopify response status:', response.status);
     const data = await response.json();
-    console.log('metafields count:', data.metafields ? data.metafields.length : 'none');
-    
     const pointField = data.metafields.find(m => m.namespace === 'poingpong' && m.key === 'points_after_change');
     const lastGrantedField = data.metafields.find(m => m.namespace === 'poingpong' && m.key === 'last_point_granted_at');
     const points = pointField ? parseInt(pointField.value) : 0;
     const lastGrantedAt = lastGrantedField ? lastGrantedField.value : null;
     res.json({ ok: true, points, lastGrantedAt });
   } catch (e) {
-    console.log('error:', e.message);
     res.json({ ok: false, points: 0 });
   }
 });
 
-// ガチャ履歴取得
-app.get('/history', (req, res) => {
+app.get('/history', async (req, res) => {
   const { customerId } = req.query;
   if (!customerId) return res.json({ ok: false, history: [] });
-  
-  const history = db.prepare(
-    'SELECT reward_name, points_used, created_at FROM gacha_history WHERE customer_id = ? ORDER BY created_at DESC LIMIT 10'
-  ).all(customerId);
-  
-  res.json({ ok: true, history });
+  try {
+    const result = await pool.query(
+      'SELECT reward_name, points_used, created_at FROM gacha_history WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 10',
+      [customerId]
+    );
+    res.json({ ok: true, history: result.rows });
+  } catch (e) {
+    res.json({ ok: false, history: [] });
+  }
 });
 
-app.post('/verify', (req, res) => {
+app.post('/verify', async (req, res) => {
   const { customerId, coupon } = req.body;
   try {
-    db.prepare('INSERT INTO spin_tickets (customer_id, coupon_code) VALUES (?, ?)').run(customerId, coupon);
+    await pool.query(
+      'INSERT INTO spin_tickets (customer_id, coupon_code) VALUES ($1, $2)',
+      [customerId, coupon]
+    );
     res.json({ ok: true });
   } catch {
     res.json({ ok: false });
@@ -133,36 +104,52 @@ app.post('/verify', (req, res) => {
 app.post('/spin', async (req, res) => {
   const { customerId, coupon } = req.body;
 
-  const ticket = db.prepare(
-    "SELECT * FROM spin_tickets WHERE coupon_code = ? AND status = 'verified'"
-  ).get(coupon);
-
-  if (!ticket) return res.json({ ok: false });
-
-  if (ACCESS_TOKEN) {
-    const shopifyRes = await fetch(
-      `https://${SHOPIFY_SHOP}/admin/api/2025-01/discount_codes/lookup.json?code=${coupon}`,
-      { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
+  try {
+    const ticketResult = await pool.query(
+      "SELECT * FROM spin_tickets WHERE coupon_code = $1 AND status = 'verified'",
+      [coupon]
     );
-    if (!shopifyRes.ok) {
-      return res.json({ ok: false, message: '無効なコードです' });
+
+    if (ticketResult.rows.length === 0) {
+      return res.json({ ok: false });
     }
-    const shopifyData = await shopifyRes.json();
-    const { id, price_rule_id } = shopifyData.discount_code;
-    await fetch(
-      `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules/${price_rule_id}/discount_codes/${id}.json`,
-      {
-        method: 'DELETE',
-        headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN }
-      }
-    );
-  }
 
-  const reward = draw();
-  db.prepare('UPDATE rewards SET stock = stock - 1 WHERE id = ?').run(reward.id);
-  db.prepare("UPDATE spin_tickets SET status = 'used' WHERE id = ?").run(ticket.id);
-  db.prepare('INSERT INTO gacha_history (customer_id, reward_name) VALUES (?, ?)').run(customerId, reward.name);
-  res.json({ ok: true, reward: reward.name });
+    const ticket = ticketResult.rows[0];
+
+    if (ACCESS_TOKEN) {
+      const shopifyRes = await fetch(
+        `https://${SHOPIFY_SHOP}/admin/api/2025-01/discount_codes/lookup.json?code=${coupon}`,
+        { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
+      );
+      if (!shopifyRes.ok) {
+        return res.json({ ok: false, message: '無効なコードです' });
+      }
+      const shopifyData = await shopifyRes.json();
+      const { id, price_rule_id } = shopifyData.discount_code;
+      await fetch(
+        `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules/${price_rule_id}/discount_codes/${id}.json`,
+        {
+          method: 'DELETE',
+          headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN }
+        }
+      );
+    }
+
+    const reward = await draw();
+    if (!reward) return res.json({ ok: false, message: '景品がありません' });
+
+    await pool.query('UPDATE rewards SET stock = stock - 1 WHERE id = $1', [reward.id]);
+    await pool.query("UPDATE spin_tickets SET status = 'used' WHERE id = $1", [ticket.id]);
+    await pool.query(
+      'INSERT INTO gacha_history (customer_id, reward_name) VALUES ($1, $2)',
+      [customerId, reward.name]
+    );
+
+    res.json({ ok: true, reward: reward.name });
+  } catch (e) {
+    console.error(e);
+    res.json({ ok: false, message: 'エラーが発生しました' });
+  }
 });
 
 app.listen(PORT, () => {
