@@ -84,13 +84,14 @@ app.get('/points', async (req, res) => {
     );
     const data = await response.json();
     const pointField = data.metafields.find(m => m.namespace === 'poingpong' && m.key === 'points_after_change');
+    const lastGrantedField = data.metafields.find(m => m.namespace === 'poingpong' && m.key === 'last_point_granted_at');
     const points = pointField ? parseInt(pointField.value) : 0;
-    res.json({ ok: true, points });
+    const lastGrantedAt = lastGrantedField ? lastGrantedField.value : null;
+    res.json({ ok: true, points, lastGrantedAt });
   } catch (e) {
     res.json({ ok: false, points: 0 });
   }
 });
-
 app.post('/verify', (req, res) => {
   const { customerId, coupon } = req.body;
   try {
