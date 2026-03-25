@@ -69,11 +69,14 @@ app.get('/callback', async (req, res) => {
   res.send('インストール完了しました。このページを閉じてください。');
 });
 
-// ポイント残高取得
 app.get('/points', async (req, res) => {
   const { customerId } = req.query;
 
+  console.log('points called, customerId:', customerId);
+  console.log('ACCESS_TOKEN exists:', !!ACCESS_TOKEN);
+
   if (!customerId || !ACCESS_TOKEN) {
+    console.log('missing customerId or ACCESS_TOKEN');
     return res.json({ ok: false, points: 0 });
   }
 
@@ -82,13 +85,17 @@ app.get('/points', async (req, res) => {
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/customers/${customerId}/metafields.json`,
       { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
     );
+    console.log('shopify response status:', response.status);
     const data = await response.json();
+    console.log('metafields count:', data.metafields ? data.metafields.length : 'none');
+    
     const pointField = data.metafields.find(m => m.namespace === 'poingpong' && m.key === 'points_after_change');
     const lastGrantedField = data.metafields.find(m => m.namespace === 'poingpong' && m.key === 'last_point_granted_at');
     const points = pointField ? parseInt(pointField.value) : 0;
     const lastGrantedAt = lastGrantedField ? lastGrantedField.value : null;
     res.json({ ok: true, points, lastGrantedAt });
   } catch (e) {
+    console.log('error:', e.message);
     res.json({ ok: false, points: 0 });
   }
 });
