@@ -130,36 +130,40 @@ app.post('/spin', async (req, res) => {
         `https://${SHOPIFY_SHOP}/admin/api/2025-01/discount_codes/lookup.json?code=${coupon}`,
         { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
       );
+      console.log('lookup status:', shopifyRes.status);
       if (!shopifyRes.ok) {
         return res.json({ ok: false, message: '無効なコードです' });
       }
       const shopifyData = await shopifyRes.json();
+      console.log('shopifyData:', JSON.stringify(shopifyData));
       const { id, price_rule_id } = shopifyData.discount_code;
-      await fetch(
+      console.log('deleting id:', id, 'price_rule_id:', price_rule_id);
+      const deleteRes = await fetch(
         `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules/${price_rule_id}/discount_codes/${id}.json`,
         {
           method: 'DELETE',
           headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN }
         }
       );
+      console.log('delete status:', deleteRes.status);
     }
-
+    
     const reward = await draw();
     if (!reward) return res.json({ ok: false, message: '景品がありません' });
-
+    
     await pool.query('UPDATE rewards SET stock = stock - 1 WHERE id = $1', [reward.id]);
     await pool.query("UPDATE spin_tickets SET status = 'used' WHERE id = $1", [ticket.id]);
     await pool.query(
       'INSERT INTO gacha_history (customer_id, reward_name) VALUES ($1, $2)',
       [customerId, reward.name]
     );
-
+    
     res.json({ ok: true, reward: reward.name, rarity: reward.rarity || 'normal' });
-  } catch (e) {
-    console.error(e);
-    res.json({ ok: false, message: 'エラーが発生しました' });
-  }
-});
+    } catch (e) {
+      console.error(e);
+      res.json({ ok: false, message: 'エラーが発生しました' });
+    }
+    });
 
 // 管理画面
 app.get('/admin', adminAuth, (_req, res) => {
