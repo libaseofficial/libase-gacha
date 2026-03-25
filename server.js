@@ -44,6 +44,60 @@ async function draw() {
   return rewards[rewards.length - 1];
 }
 
+// 景品の割引コードを自動発行
+async function issueRewardCode(reward) {
+  if (!ACCESS_TOKEN) return null;
+  if (reward.reward_type === 'manual') return null;
+
+  try {
+    // price_ruleを作成
+    const priceRuleRes = await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': ACCESS_TOKEN,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          price_rule: {
+            title: `GACHA-${reward.name}`,
+            target_type: reward.reward_type === 'shipping' ? 'shipping_line' : 'line_item',
+            target_selection: 'all',
+            allocation_method: 'across',
+            value_type: reward.reward_type === 'shipping' ? 'percentage' : 'fixed_amount',
+            value: reward.reward_type === 'shipping' ? '-100.0' : `-${reward.discount_amount}.0`,
+            customer_selection: 'all',
+            starts_at: new Date().toISOString(),
+            usage_limit: 1
+          }
+        })
+      }
+    );
+    const priceRuleData = await priceRuleRes.json();
+    const priceRuleId = priceRuleData.price_rule.id;
+
+    // discount_codeを作成
+    const code = 'GACHA-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+    const discountRes = await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules/${priceRuleId}/discount_codes.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': ACCESS_TOKEN,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ discount_code: { code } })
+      }
+    );
+    const discountData = await discountRes.json();
+    return discountData.discount_code.code;
+  } catch (e) {
+    console.error('issueRewardCode error:', e);
+    return null;
+  }
+}
+
 app.get('/', (_req, res) => {
   res.send('LIBASE Gacha Server is running');
 });
@@ -91,7 +145,7 @@ app.get('/history', async (req, res) => {
   if (!customerId) return res.json({ ok: false, history: [] });
   try {
     const result = await pool.query(
-      'SELECT reward_name, points_used, created_at FROM gacha_history WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 10',
+      'SELECT reward_name, points_used, created_at, reward_code FROM gacha_history WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 10',
       [customerId]
     );
     res.json({ ok: true, history: result.rows });
@@ -130,40 +184,45 @@ app.post('/spin', async (req, res) => {
         `https://${SHOPIFY_SHOP}/admin/api/2025-01/discount_codes/lookup.json?code=${coupon}`,
         { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
       );
-      console.log('lookup status:', shopifyRes.status);
       if (!shopifyRes.ok) {
         return res.json({ ok: false, message: '無効なコードです' });
       }
       const shopifyData = await shopifyRes.json();
-      console.log('shopifyData:', JSON.stringify(shopifyData));
       const { id, price_rule_id } = shopifyData.discount_code;
-      console.log('deleting id:', id, 'price_rule_id:', price_rule_id);
-      const deleteRes = await fetch(
+      await fetch(
         `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules/${price_rule_id}/discount_codes/${id}.json`,
         {
           method: 'DELETE',
           headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN }
         }
       );
-      console.log('delete status:', deleteRes.status);
     }
-    
+
     const reward = await draw();
     if (!reward) return res.json({ ok: false, message: '景品がありません' });
-    
+
+    // 景品コードを自動発行
+    const rewardCode = await issueRewardCode(reward);
+
     await pool.query('UPDATE rewards SET stock = stock - 1 WHERE id = $1', [reward.id]);
     await pool.query("UPDATE spin_tickets SET status = 'used' WHERE id = $1", [ticket.id]);
     await pool.query(
-      'INSERT INTO gacha_history (customer_id, reward_name) VALUES ($1, $2)',
-      [customerId, reward.name]
+      'INSERT INTO gacha_history (customer_id, reward_name, reward_code) VALUES ($1, $2, $3)',
+      [customerId, reward.name, rewardCode]
     );
-    
-    res.json({ ok: true, reward: reward.name, rarity: reward.rarity || 'normal' });
-    } catch (e) {
-      console.error(e);
-      res.json({ ok: false, message: 'エラーが発生しました' });
-    }
+
+    res.json({
+      ok: true,
+      reward: reward.name,
+      rarity: reward.rarity || 'normal',
+      rewardCode: rewardCode,
+      rewardType: reward.reward_type
     });
+  } catch (e) {
+    console.error(e);
+    res.json({ ok: false, message: 'エラーが発生しました' });
+  }
+});
 
 // 管理画面
 app.get('/admin', adminAuth, (_req, res) => {
