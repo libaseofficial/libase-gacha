@@ -29,21 +29,23 @@
   .btn-primary { background: #111; color: #fff; }
   .btn-danger { background: #e74c3c; color: #fff; }
   .btn-edit { background: #f0f0f0; color: #333; }
+  .btn-code { background: #4a9eff; color: #fff; }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .form-group { display: flex; flex-direction: column; gap: 4px; }
   .form-group label { font-size: 13px; color: #666; }
-  .form-group input, .form-group select { padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+  .form-group input, .form-group select, .form-group textarea { padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+  .form-group textarea { resize: vertical; min-height: 80px; }
   .form-actions { margin-top: 16px; display: flex; gap: 8px; }
   .section { display: none; }
   .section.active { display: block; }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
-  .stat-card { background: #fff; border-radius: 12px; padding: 20px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-  .stat-card .number { font-size: 32px; font-weight: bold; }
-  .stat-card .label { font-size: 13px; color: #666; margin-top: 4px; }
   .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
   .modal.open { display: flex; }
-  .modal-content { background: #fff; border-radius: 12px; padding: 24px; width: 90%; max-width: 500px; }
+  .modal-content { background: #fff; border-radius: 12px; padding: 24px; width: 90%; max-width: 500px; max-height: 80vh; overflow-y: auto; }
   .modal-content h3 { margin-bottom: 16px; }
+  .code-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+  .code-used { color: #aaa; text-decoration: line-through; }
+  .badge-used { background: #aaa; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+  .badge-available { background: #2ecc71; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -51,8 +53,8 @@
 <div class="header">
   <h1>🎰 LIBASE ガチャ管理画面</h1>
   <div class="tabs">
-    <button class="tab active" onclick="showSection('rewards')">景品管理</button>
-    <button class="tab" onclick="showSection('history')">当選履歴</button>
+    <button class="tab active" onclick="showSection('rewards', this)">景品管理</button>
+    <button class="tab" onclick="showSection('history', this)">当選履歴</button>
   </div>
 </div>
 
@@ -82,8 +84,9 @@
           <label>景品タイプ</label>
           <select id="add-type">
             <option value="discount">割引コード（自動発行）</option>
-            <option value="manual">手動対応（スタバ・アマギフ等）</option>
             <option value="shipping">送料無料（自動発行）</option>
+            <option value="external">外部コード（スタバ・アマギフ等）</option>
+            <option value="manual">手動対応</option>
           </select>
         </div>
         <div class="form-group">
@@ -138,6 +141,7 @@
             <th>顧客ID</th>
             <th>当選景品</th>
             <th>使用ポイント</th>
+            <th>発行コード</th>
           </tr>
         </thead>
         <tbody id="history-table"></tbody>
@@ -147,7 +151,7 @@
 
 </div>
 
-<!-- 編集モーダル -->
+<!-- 景品編集モーダル -->
 <div class="modal" id="edit-modal">
   <div class="modal-content">
     <h3>景品を編集</h3>
@@ -172,8 +176,9 @@
         <label>景品タイプ</label>
         <select id="edit-type">
           <option value="discount">割引コード（自動発行）</option>
+          <option value="shipping">送料無料（自動発行）</option>
+          <option value="external">外部コード（スタバ・アマギフ等）</option>
           <option value="manual">手動対応</option>
-          <option value="shipping">送料無料</option>
         </select>
       </div>
       <div class="form-group">
@@ -195,7 +200,30 @@
     </div>
     <div class="form-actions">
       <button class="btn btn-primary" onclick="saveEdit()">保存</button>
-      <button class="btn btn-edit" onclick="closeModal()">キャンセル</button>
+      <button class="btn btn-edit" onclick="closeModal('edit-modal')">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- 外部コード管理モーダル -->
+<div class="modal" id="code-modal">
+  <div class="modal-content">
+    <h3 id="code-modal-title">外部コード管理</h3>
+    <input type="hidden" id="code-reward-id">
+
+    <div class="form-group" style="margin-bottom:16px;">
+      <label>コードを追加（1行1コード）</label>
+      <textarea id="add-codes" placeholder="STARBUCKS-ABC123&#10;STARBUCKS-DEF456&#10;STARBUCKS-GHI789"></textarea>
+    </div>
+    <div class="form-actions" style="margin-bottom:16px;">
+      <button class="btn btn-primary" onclick="addExternalCodes()">追加する</button>
+    </div>
+
+    <h4 style="font-size:14px;margin-bottom:8px;">登録済みコード</h4>
+    <div id="external-codes-list"></div>
+
+    <div class="form-actions" style="margin-top:16px;">
+      <button class="btn btn-edit" onclick="closeModal('code-modal')">閉じる</button>
     </div>
   </div>
 </div>
@@ -212,15 +240,16 @@ const RARITY_LABELS = {
 
 const TYPE_LABELS = {
   discount: '割引コード',
-  manual: '手動対応',
-  shipping: '送料無料'
+  shipping: '送料無料',
+  external: '外部コード',
+  manual: '手動対応'
 };
 
-function showSection(name) {
+function showSection(name, el) {
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('section-' + name).classList.add('active');
-  event.target.classList.add('active');
+  el.classList.add('active');
   if (name === 'history') loadHistory();
   if (name === 'rewards') loadRewards();
 }
@@ -237,8 +266,9 @@ async function loadRewards() {
       <td>${r.discount_amount > 0 ? r.discount_amount + '円' : '-'}</td>
       <td>${r.probability}</td>
       <td>${r.stock}</td>
-      <td style="display:flex;gap:6px;">
+      <td style="display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn btn-edit" onclick="openEdit(${r.id})">編集</button>
+        ${r.reward_type === 'external' ? `<button class="btn btn-code" onclick="openCodeManager(${r.id}, '${r.name}')">コード管理</button>` : ''}
         <button class="btn btn-danger" onclick="deleteReward(${r.id})">削除</button>
       </td>
     </tr>
@@ -258,6 +288,7 @@ async function loadHistory() {
         <td>${h.customer_id}</td>
         <td>${h.reward_name}</td>
         <td>${h.points_used}pt</td>
+        <td>${h.reward_code || '-'}</td>
       </tr>
     `;
   }).join('');
@@ -287,13 +318,10 @@ async function deleteReward(id) {
   loadRewards();
 }
 
-let editData = {};
-
 async function openEdit(id) {
   const res = await fetch('/admin/api/rewards');
   const rewards = await res.json();
   const r = rewards.find(x => x.id === id);
-  editData = r;
   document.getElementById('edit-id').value = r.id;
   document.getElementById('edit-name').value = r.name;
   document.getElementById('edit-rarity').value = r.rarity;
@@ -321,12 +349,60 @@ async function saveEdit() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
-  closeModal();
+  closeModal('edit-modal');
   loadRewards();
 }
 
-function closeModal() {
-  document.getElementById('edit-modal').classList.remove('open');
+async function openCodeManager(rewardId, rewardName) {
+  document.getElementById('code-reward-id').value = rewardId;
+  document.getElementById('code-modal-title').textContent = `外部コード管理：${rewardName}`;
+  document.getElementById('add-codes').value = '';
+  await loadExternalCodes(rewardId);
+  document.getElementById('code-modal').classList.add('open');
+}
+
+async function loadExternalCodes(rewardId) {
+  const res = await fetch('/admin/api/external-codes/' + rewardId);
+  const codes = await res.json();
+  const list = document.getElementById('external-codes-list');
+  if (codes.length === 0) {
+    list.innerHTML = '<p style="color:#aaa;font-size:13px;">登録済みコードはありません</p>';
+    return;
+  }
+  list.innerHTML = codes.map(c => `
+    <div class="code-item">
+      <span class="${c.status === 'used' ? 'code-used' : ''}">${c.code}</span>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <span class="${c.status === 'used' ? 'badge-used' : 'badge-available'}">${c.status === 'used' ? '使用済み' : '未使用'}</span>
+        ${c.status !== 'used' ? `<button class="btn btn-danger" style="padding:3px 8px;font-size:12px;" onclick="deleteExternalCode(${c.id})">削除</button>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function addExternalCodes() {
+  const rewardId = document.getElementById('code-reward-id').value;
+  const text = document.getElementById('add-codes').value.trim();
+  if (!text) return;
+  const codes = text.split('\n').map(c => c.trim()).filter(c => c);
+  await fetch('/admin/api/external-codes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reward_id: rewardId, codes })
+  });
+  document.getElementById('add-codes').value = '';
+  await loadExternalCodes(rewardId);
+}
+
+async function deleteExternalCode(id) {
+  if (!confirm('削除しますか？')) return;
+  await fetch('/admin/api/external-codes/' + id, { method: 'DELETE' });
+  const rewardId = document.getElementById('code-reward-id').value;
+  await loadExternalCodes(rewardId);
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
 }
 
 loadRewards();
