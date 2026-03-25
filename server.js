@@ -44,13 +44,29 @@ async function draw() {
   return rewards[rewards.length - 1];
 }
 
-// 景品の割引コードを自動発行
 async function issueRewardCode(reward) {
   if (!ACCESS_TOKEN) return null;
+
+  // 手動対応
   if (reward.reward_type === 'manual') return null;
 
+  // 外部コード（スタバ・アマギフ等）
+  if (reward.reward_type === 'external') {
+    const result = await pool.query(
+      "SELECT * FROM external_codes WHERE reward_id = $1 AND status = 'available' LIMIT 1",
+      [reward.id]
+    );
+    if (result.rows.length === 0) return null;
+    const externalCode = result.rows[0];
+    await pool.query(
+      "UPDATE external_codes SET status = 'used', used_at = NOW() WHERE id = $1",
+      [externalCode.id]
+    );
+    return externalCode.code;
+  }
+
+  // 割引コード・送料無料（Shopify自動発行）
   try {
-    // price_ruleを作成
     const priceRuleRes = await fetch(
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules.json`,
       {
@@ -77,7 +93,6 @@ async function issueRewardCode(reward) {
     const priceRuleData = await priceRuleRes.json();
     const priceRuleId = priceRuleData.price_rule.id;
 
-    // discount_codeを作成
     const code = 'GACHA-' + Math.random().toString(36).substring(2, 10).toUpperCase();
     const discountRes = await fetch(
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules/${priceRuleId}/discount_codes.json`,
@@ -201,7 +216,6 @@ app.post('/spin', async (req, res) => {
     const reward = await draw();
     if (!reward) return res.json({ ok: false, message: '景品がありません' });
 
-    // 景品コードを自動発行
     const rewardCode = await issueRewardCode(reward);
 
     await pool.query('UPDATE rewards SET stock = stock - 1 WHERE id = $1', [reward.id]);
@@ -262,6 +276,29 @@ app.get('/admin/api/history', adminAuth, async (_req, res) => {
     'SELECT * FROM gacha_history ORDER BY created_at DESC LIMIT 50'
   );
   res.json(result.rows);
+});
+
+// 外部コード管理API
+app.get('/admin/api/external-codes/:rewardId', adminAuth, async (req, res) => {
+  const result = await pool.query(
+    'SELECT * FROM external_codes WHERE reward_id = $1 ORDER BY created_at DESC',
+    [req.params.rewardId]
+  );
+  res.json(result.rows);
+});
+
+app.post('/admin/api/external-codes', adminAuth, async (req, res) => {
+  const { reward_id, codes } = req.body;
+  const values = codes.map(code => `(${reward_id}, '${code}')`).join(',');
+  await pool.query(
+    `INSERT INTO external_codes (reward_id, code) VALUES ${values}`
+  );
+  res.json({ ok: true });
+});
+
+app.delete('/admin/api/external-codes/:id', adminAuth, async (req, res) => {
+  await pool.query('DELETE FROM external_codes WHERE id = $1', [req.params.id]);
+  res.json({ ok: true });
 });
 
 app.listen(PORT, () => {
