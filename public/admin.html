@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LIBASE ガチャ管理画面</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: #f5f5f5; color: #333; }
+  .header { background: #111; color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 18px; }
+  .tabs { display: flex; gap: 8px; }
+  .tab { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; background: #333; color: #fff; font-size: 14px; }
+  .tab.active { background: #fff; color: #111; }
+  .container { max-width: 1000px; margin: 24px auto; padding: 0 16px; }
+  .card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .card h2 { font-size: 16px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #f9f9f9; padding: 10px 12px; text-align: left; font-size: 13px; color: #666; border-bottom: 1px solid #eee; }
+  td { padding: 10px 12px; font-size: 14px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+  .rarity-badge { padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; color: #fff; }
+  .rarity-normal { background: #aaa; }
+  .rarity-rare { background: #4a9eff; }
+  .rarity-super_rare { background: #2ecc71; }
+  .rarity-ultra_rare { background: #f1c40f; color: #333; }
+  .rarity-secret_rare { background: #e74c3c; }
+  .rarity-rainbow { background: linear-gradient(90deg, #ff6b6b, #ffd93d, #6bcb77, #4d96ff, #c77dff); }
+  .btn { padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .btn-primary { background: #111; color: #fff; }
+  .btn-danger { background: #e74c3c; color: #fff; }
+  .btn-edit { background: #f0f0f0; color: #333; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .form-group { display: flex; flex-direction: column; gap: 4px; }
+  .form-group label { font-size: 13px; color: #666; }
+  .form-group input, .form-group select { padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+  .form-actions { margin-top: 16px; display: flex; gap: 8px; }
+  .section { display: none; }
+  .section.active { display: block; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+  .stat-card { background: #fff; border-radius: 12px; padding: 20px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .stat-card .number { font-size: 32px; font-weight: bold; }
+  .stat-card .label { font-size: 13px; color: #666; margin-top: 4px; }
+  .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
+  .modal.open { display: flex; }
+  .modal-content { background: #fff; border-radius: 12px; padding: 24px; width: 90%; max-width: 500px; }
+  .modal-content h3 { margin-bottom: 16px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🎰 LIBASE ガチャ管理画面</h1>
+  <div class="tabs">
+    <button class="tab active" onclick="showSection('rewards')">景品管理</button>
+    <button class="tab" onclick="showSection('history')">当選履歴</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- 景品管理 -->
+  <div id="section-rewards" class="section active">
+    <div class="card">
+      <h2>景品を追加</h2>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>景品名</label>
+          <input type="text" id="add-name" placeholder="例：500円OFF">
+        </div>
+        <div class="form-group">
+          <label>レアリティ</label>
+          <select id="add-rarity">
+            <option value="normal">⬜ Normal（白・ハズレ）</option>
+            <option value="rare">🟦 Rare（青）</option>
+            <option value="super_rare">🟩 Super Rare（緑）</option>
+            <option value="ultra_rare">🟨 Ultra Rare（金）</option>
+            <option value="secret_rare">🟥 Secret Rare（赤）</option>
+            <option value="rainbow">🌈 Rainbow（虹・神引き）</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>景品タイプ</label>
+          <select id="add-type">
+            <option value="discount">割引コード（自動発行）</option>
+            <option value="manual">手動対応（スタバ・アマギフ等）</option>
+            <option value="shipping">送料無料（自動発行）</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>割引金額（円）</label>
+          <input type="number" id="add-discount" placeholder="例：500" value="0">
+        </div>
+        <div class="form-group">
+          <label>確率（整数）</label>
+          <input type="number" id="add-probability" placeholder="例：70">
+        </div>
+        <div class="form-group">
+          <label>在庫数</label>
+          <input type="number" id="add-stock" placeholder="例：100">
+        </div>
+        <div class="form-group" style="grid-column: span 2;">
+          <label>画像URL（任意）</label>
+          <input type="text" id="add-image" placeholder="https://...">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="addReward()">追加する</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>景品一覧</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>景品名</th>
+            <th>レアリティ</th>
+            <th>タイプ</th>
+            <th>割引額</th>
+            <th>確率</th>
+            <th>在庫</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="rewards-table"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 当選履歴 -->
+  <div id="section-history" class="section">
+    <div class="card">
+      <h2>当選履歴（直近50件）</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>日時</th>
+            <th>顧客ID</th>
+            <th>当選景品</th>
+            <th>使用ポイント</th>
+          </tr>
+        </thead>
+        <tbody id="history-table"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- 編集モーダル -->
+<div class="modal" id="edit-modal">
+  <div class="modal-content">
+    <h3>景品を編集</h3>
+    <input type="hidden" id="edit-id">
+    <div class="form-grid">
+      <div class="form-group">
+        <label>景品名</label>
+        <input type="text" id="edit-name">
+      </div>
+      <div class="form-group">
+        <label>レアリティ</label>
+        <select id="edit-rarity">
+          <option value="normal">⬜ Normal（白・ハズレ）</option>
+          <option value="rare">🟦 Rare（青）</option>
+          <option value="super_rare">🟩 Super Rare（緑）</option>
+          <option value="ultra_rare">🟨 Ultra Rare（金）</option>
+          <option value="secret_rare">🟥 Secret Rare（赤）</option>
+          <option value="rainbow">🌈 Rainbow（虹・神引き）</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>景品タイプ</label>
+        <select id="edit-type">
+          <option value="discount">割引コード（自動発行）</option>
+          <option value="manual">手動対応</option>
+          <option value="shipping">送料無料</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>割引金額（円）</label>
+        <input type="number" id="edit-discount">
+      </div>
+      <div class="form-group">
+        <label>確率</label>
+        <input type="number" id="edit-probability">
+      </div>
+      <div class="form-group">
+        <label>在庫数</label>
+        <input type="number" id="edit-stock">
+      </div>
+      <div class="form-group" style="grid-column: span 2;">
+        <label>画像URL</label>
+        <input type="text" id="edit-image">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveEdit()">保存</button>
+      <button class="btn btn-edit" onclick="closeModal()">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const RARITY_LABELS = {
+  normal: '⬜ Normal',
+  rare: '🟦 Rare',
+  super_rare: '🟩 Super Rare',
+  ultra_rare: '🟨 Ultra Rare',
+  secret_rare: '🟥 Secret Rare',
+  rainbow: '🌈 Rainbow'
+};
+
+const TYPE_LABELS = {
+  discount: '割引コード',
+  manual: '手動対応',
+  shipping: '送料無料'
+};
+
+function showSection(name) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('section-' + name).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'history') loadHistory();
+  if (name === 'rewards') loadRewards();
+}
+
+async function loadRewards() {
+  const res = await fetch('/admin/api/rewards');
+  const rewards = await res.json();
+  const tbody = document.getElementById('rewards-table');
+  tbody.innerHTML = rewards.map(r => `
+    <tr>
+      <td>${r.name}</td>
+      <td><span class="rarity-badge rarity-${r.rarity}">${RARITY_LABELS[r.rarity] || r.rarity}</span></td>
+      <td>${TYPE_LABELS[r.reward_type] || r.reward_type}</td>
+      <td>${r.discount_amount > 0 ? r.discount_amount + '円' : '-'}</td>
+      <td>${r.probability}</td>
+      <td>${r.stock}</td>
+      <td style="display:flex;gap:6px;">
+        <button class="btn btn-edit" onclick="openEdit(${r.id})">編集</button>
+        <button class="btn btn-danger" onclick="deleteReward(${r.id})">削除</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function loadHistory() {
+  const res = await fetch('/admin/api/history');
+  const history = await res.json();
+  const tbody = document.getElementById('history-table');
+  tbody.innerHTML = history.map(h => {
+    const d = new Date(h.created_at);
+    const date = d.getFullYear() + '/' + (d.getMonth()+1) + '/' + d.getDate() + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
+    return `
+      <tr>
+        <td>${date}</td>
+        <td>${h.customer_id}</td>
+        <td>${h.reward_name}</td>
+        <td>${h.points_used}pt</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function addReward() {
+  const body = {
+    name: document.getElementById('add-name').value,
+    rarity: document.getElementById('add-rarity').value,
+    reward_type: document.getElementById('add-type').value,
+    discount_amount: parseInt(document.getElementById('add-discount').value) || 0,
+    probability: parseInt(document.getElementById('add-probability').value),
+    stock: parseInt(document.getElementById('add-stock').value),
+    image_url: document.getElementById('add-image').value || null
+  };
+  await fetch('/admin/api/rewards', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  loadRewards();
+}
+
+async function deleteReward(id) {
+  if (!confirm('削除しますか？')) return;
+  await fetch('/admin/api/rewards/' + id, { method: 'DELETE' });
+  loadRewards();
+}
+
+let editData = {};
+
+async function openEdit(id) {
+  const res = await fetch('/admin/api/rewards');
+  const rewards = await res.json();
+  const r = rewards.find(x => x.id === id);
+  editData = r;
+  document.getElementById('edit-id').value = r.id;
+  document.getElementById('edit-name').value = r.name;
+  document.getElementById('edit-rarity').value = r.rarity;
+  document.getElementById('edit-type').value = r.reward_type;
+  document.getElementById('edit-discount').value = r.discount_amount;
+  document.getElementById('edit-probability').value = r.probability;
+  document.getElementById('edit-stock').value = r.stock;
+  document.getElementById('edit-image').value = r.image_url || '';
+  document.getElementById('edit-modal').classList.add('open');
+}
+
+async function saveEdit() {
+  const id = document.getElementById('edit-id').value;
+  const body = {
+    name: document.getElementById('edit-name').value,
+    rarity: document.getElementById('edit-rarity').value,
+    reward_type: document.getElementById('edit-type').value,
+    discount_amount: parseInt(document.getElementById('edit-discount').value) || 0,
+    probability: parseInt(document.getElementById('edit-probability').value),
+    stock: parseInt(document.getElementById('edit-stock').value),
+    image_url: document.getElementById('edit-image').value || null
+  };
+  await fetch('/admin/api/rewards/' + id, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  closeModal();
+  loadRewards();
+}
+
+function closeModal() {
+  document.getElementById('edit-modal').classList.remove('open');
+}
+
+loadRewards();
+</script>
+</body>
+</html>

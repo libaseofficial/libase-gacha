@@ -1,13 +1,20 @@
 import express from 'express';
 import cors from 'cors';
 import pkg from 'pg';
+import basicAuth from 'express-basic-auth';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
 const { Pool } = pkg;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static(join(__dirname, 'public')));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -18,6 +25,11 @@ const SHOPIFY_SHOP = 's62nix-7r.myshopify.com';
 const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 let ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN || '';
+
+const adminAuth = basicAuth({
+  users: { 'admin': process.env.ADMIN_PASSWORD || 'libase2024' },
+  challenge: true
+});
 
 async function draw() {
   const result = await pool.query('SELECT * FROM rewards WHERE stock > 0');
@@ -103,17 +115,14 @@ app.post('/verify', async (req, res) => {
 
 app.post('/spin', async (req, res) => {
   const { customerId, coupon } = req.body;
-
   try {
     const ticketResult = await pool.query(
       "SELECT * FROM spin_tickets WHERE coupon_code = $1 AND status = 'verified'",
       [coupon]
     );
-
     if (ticketResult.rows.length === 0) {
       return res.json({ ok: false });
     }
-
     const ticket = ticketResult.rows[0];
 
     if (ACCESS_TOKEN) {
@@ -145,11 +154,51 @@ app.post('/spin', async (req, res) => {
       [customerId, reward.name]
     );
 
-    res.json({ ok: true, reward: reward.name });
+    res.json({ ok: true, reward: reward.name, rarity: reward.rarity || 'normal' });
   } catch (e) {
     console.error(e);
     res.json({ ok: false, message: 'エラーが発生しました' });
   }
+});
+
+// 管理画面
+app.get('/admin', adminAuth, (_req, res) => {
+  res.sendFile(join(__dirname, 'public', 'admin.html'));
+});
+
+app.get('/admin/api/rewards', adminAuth, async (_req, res) => {
+  const result = await pool.query('SELECT * FROM rewards ORDER BY id');
+  res.json(result.rows);
+});
+
+app.post('/admin/api/rewards', adminAuth, async (req, res) => {
+  const { name, probability, stock, rarity, reward_type, discount_amount, image_url } = req.body;
+  const result = await pool.query(
+    'INSERT INTO rewards (name, probability, stock, rarity, reward_type, discount_amount, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+    [name, probability, stock, rarity, reward_type, discount_amount, image_url]
+  );
+  res.json(result.rows[0]);
+});
+
+app.put('/admin/api/rewards/:id', adminAuth, async (req, res) => {
+  const { name, probability, stock, rarity, reward_type, discount_amount, image_url } = req.body;
+  const result = await pool.query(
+    'UPDATE rewards SET name=$1, probability=$2, stock=$3, rarity=$4, reward_type=$5, discount_amount=$6, image_url=$7 WHERE id=$8 RETURNING *',
+    [name, probability, stock, rarity, reward_type, discount_amount, image_url, req.params.id]
+  );
+  res.json(result.rows[0]);
+});
+
+app.delete('/admin/api/rewards/:id', adminAuth, async (req, res) => {
+  await pool.query('DELETE FROM rewards WHERE id = $1', [req.params.id]);
+  res.json({ ok: true });
+});
+
+app.get('/admin/api/history', adminAuth, async (_req, res) => {
+  const result = await pool.query(
+    'SELECT * FROM gacha_history ORDER BY created_at DESC LIMIT 50'
+  );
+  res.json(result.rows);
 });
 
 app.listen(PORT, () => {
