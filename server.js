@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS rewards (
   probability INTEGER,
   stock INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS gacha_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id TEXT,
+  reward_name TEXT,
+  points_used INTEGER DEFAULT 500,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 const count = db.prepare('SELECT COUNT(*) as c FROM rewards').get().c;
@@ -99,6 +107,19 @@ app.get('/points', async (req, res) => {
     res.json({ ok: false, points: 0 });
   }
 });
+
+// ガチャ履歴取得
+app.get('/history', (req, res) => {
+  const { customerId } = req.query;
+  if (!customerId) return res.json({ ok: false, history: [] });
+  
+  const history = db.prepare(
+    'SELECT reward_name, points_used, created_at FROM gacha_history WHERE customer_id = ? ORDER BY created_at DESC LIMIT 10'
+  ).all(customerId);
+  
+  res.json({ ok: true, history });
+});
+
 app.post('/verify', (req, res) => {
   const { customerId, coupon } = req.body;
   try {
@@ -140,6 +161,7 @@ app.post('/spin', async (req, res) => {
   const reward = draw();
   db.prepare('UPDATE rewards SET stock = stock - 1 WHERE id = ?').run(reward.id);
   db.prepare("UPDATE spin_tickets SET status = 'used' WHERE id = ?").run(ticket.id);
+  db.prepare('INSERT INTO gacha_history (customer_id, reward_name) VALUES (?, ?)').run(customerId, reward.name);
   res.json({ ok: true, reward: reward.name });
 });
 
