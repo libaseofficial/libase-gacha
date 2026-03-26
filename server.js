@@ -275,7 +275,42 @@ app.get('/admin/api/history', adminAuth, async (_req, res) => {
   const result = await pool.query(
     'SELECT * FROM gacha_history ORDER BY created_at DESC LIMIT 50'
   );
-  res.json(result.rows);
+  const history = result.rows;
+
+  if (!ACCESS_TOKEN || history.length === 0) {
+    return res.json(history);
+  }
+
+  // 顧客IDのリストを取得
+  const customerIds = [...new Set(history.map(h => h.customer_id))];
+
+  // Shopify APIで顧客情報を取得
+  const customerMap = {};
+  for (const id of customerIds) {
+    try {
+      const r = await fetch(
+        `https://${SHOPIFY_SHOP}/admin/api/2025-01/customers/${id}.json`,
+        { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
+      );
+      const data = await r.json();
+      if (data.customer) {
+        customerMap[id] = {
+          name: `${data.customer.first_name} ${data.customer.last_name}`.trim(),
+          email: data.customer.email
+        };
+      }
+    } catch (e) {
+      customerMap[id] = { name: '-', email: '-' };
+    }
+  }
+
+  const enriched = history.map(h => ({
+    ...h,
+    customer_name: customerMap[h.customer_id]?.name || '-',
+    customer_email: customerMap[h.customer_id]?.email || '-'
+  }));
+
+  res.json(enriched);
 });
 
 // 外部コード管理API

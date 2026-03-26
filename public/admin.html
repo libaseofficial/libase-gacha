@@ -138,10 +138,11 @@
         <thead>
           <tr>
             <th>日時</th>
-            <th>顧客ID</th>
-            <th>当選景品</th>
-            <th>使用ポイント</th>
-            <th>発行コード</th>
+<th>顧客名</th>
+<th>メール</th>
+<th>当選景品</th>
+<th>使用ポイント</th>
+<th>発行コード</th>
           </tr>
         </thead>
         <tbody id="history-table"></tbody>
@@ -283,14 +284,15 @@ async function loadHistory() {
     const d = new Date(h.created_at);
     const date = d.getFullYear() + '/' + (d.getMonth()+1) + '/' + d.getDate() + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
     return `
-      <tr>
-        <td>${date}</td>
-        <td>${h.customer_id}</td>
-        <td>${h.reward_name}</td>
-        <td>${h.points_used}pt</td>
-        <td>${h.reward_code || '-'}</td>
-      </tr>
-    `;
+  <tr>
+    <td>${date}</td>
+    <td>${h.customer_name || '-'}</td>
+    <td>${h.customer_email || '-'}</td>
+    <td>${h.reward_name}</td>
+    <td>${h.points_used}pt</td>
+    <td>${h.reward_code || '-'}</td>
+  </tr>
+`;
   }).join('');
 }
 
