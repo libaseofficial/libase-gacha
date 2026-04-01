@@ -26,6 +26,23 @@ const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 let ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN || '';
 
+// 起動時にSupabaseからトークンを読み込む
+async function loadAccessToken() {
+  try {
+    const result = await pool.query(
+      "SELECT value FROM settings WHERE key = 'shopify_access_token'"
+    );
+    if (result.rows.length > 0 && result.rows[0].value) {
+      ACCESS_TOKEN = result.rows[0].value;
+      console.log('Access token loaded from Supabase');
+    }
+  } catch (e) {
+    console.error('Failed to load access token:', e.message);
+  }
+}
+
+loadAccessToken();
+
 const adminAuth = basicAuth({
   users: { 'admin': process.env.ADMIN_PASSWORD || 'libase2024' },
   challenge: true
@@ -131,6 +148,13 @@ app.get('/callback', async (req, res) => {
   });
   const data = await response.json();
   ACCESS_TOKEN = data.access_token;
+
+  // Supabaseに保存
+  await pool.query(
+    "INSERT INTO settings (key, value) VALUES ('shopify_access_token', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
+    [ACCESS_TOKEN]
+  );
+
   res.send('インストール完了しました。このページを閉じてください。');
 });
 
