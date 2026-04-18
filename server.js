@@ -4,6 +4,7 @@ import pkg from 'pg';
 import basicAuth from 'express-basic-auth';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import crypto from 'crypto';
 
 const { Pool } = pkg;
 const __filename = fileURLToPath(import.meta.url);
@@ -13,7 +14,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json());
+// 既存の app.use(express.json()); を以下に置き換え
+app.use((req, res, next) => {
+  if (req.path === '/webhook/orders-paid') {
+    express.raw({ type: 'application/json' })(req, res, next);
+  } else {
+    express.json()(req, res, next);
+  }
+});
 app.use(express.static(join(__dirname, 'public')));
 
 const pool = new Pool({
@@ -358,6 +366,87 @@ app.post('/admin/api/external-codes', adminAuth, async (req, res) => {
 app.delete('/admin/api/external-codes/:id', adminAuth, async (req, res) => {
   await pool.query('DELETE FROM external_codes WHERE id = $1', [req.params.id]);
   res.json({ ok: true });
+});
+
+// Supabaseを定期的にpingして停止を防ぐ
+setInterval(async () => {
+  try {
+    await pool.query('SELECT 1');
+    console.log('DB ping OK');
+  } catch (e) {
+    console.error('DB ping failed:', e.message);
+  }
+}, 1000 * 60 * 60 * 24 * 6);
+
+const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
+const POINT_RATE = 1; // ¥100 = 1ポイント
+
+app.post('/webhook/orders-paid', async (req, res) => {
+  // ① HMAC署名検証
+  const hmac = req.headers['x-shopify-hmac-sha256'];
+  const hash = crypto
+    .createHmac('sha256', SHOPIFY_WEBHOOK_SECRET)
+    .update(req.body)
+    .digest('base64');
+  if (hmac !== hash) {
+    console.warn('Webhook: invalid signature');
+    return res.status(401).send('Unauthorized');
+  }
+
+  const order = JSON.parse(req.body);
+
+  // ② 顧客IDがない注文はスキップ（ゲスト購入等）
+  const customerId = order.customer?.id?.toString();
+  const email = order.customer?.email || '';
+  if (!customerId) return res.status(200).send('no customer');
+
+  // ③ 重複チェック（同じorder_idで2回処理しない）
+  const dup = await pool.query(
+    "SELECT id FROM point_logs WHERE order_id = $1 AND type = 'purchase'",
+    [order.id.toString()]
+  );
+  if (dup.rows.length > 0) return res.status(200).send('already processed');
+
+  // ④ ポイント計算（税抜き合計金額 ÷ 100）
+  const totalPrice = parseFloat(order.subtotal_price || order.total_price || 0);
+  const pointsToAdd = Math.floor(totalPrice / 100) * POINT_RATE;
+  if (pointsToAdd <= 0) return res.status(200).send('no points');
+
+  const shopDomain = SHOPIFY_SHOP;
+
+  try {
+    // ⑤ customer_points にアップサート
+    await pool.query(
+      `INSERT INTO customer_points (customer_id, shop_domain, email, points, total_earned)
+       VALUES ($1, $2, $3, $4, $4)
+       ON CONFLICT (customer_id, shop_domain)
+       DO UPDATE SET
+         points = customer_points.points + $4,
+         total_earned = customer_points.total_earned + $4,
+         email = EXCLUDED.email,
+         updated_at = NOW()`,
+      [customerId, shopDomain, email, pointsToAdd]
+    );
+
+    // ⑥ point_logs に履歴記録
+    await pool.query(
+      `INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason, order_id)
+       VALUES ($1, $2, $3, 'purchase', $4, $5)`,
+      [
+        customerId,
+        shopDomain,
+        pointsToAdd,
+        `注文 #${order.order_number} 購入ポイント`,
+        order.id.toString()
+      ]
+    );
+
+    console.log(`✅ ポイント付与: customer=${customerId} +${pointsToAdd}pt (注文#${order.order_number})`);
+    res.status(200).send('ok');
+  } catch (e) {
+    console.error('Webhook error:', e);
+    res.status(500).send('error');
+  }
 });
 
 app.listen(PORT, () => {
