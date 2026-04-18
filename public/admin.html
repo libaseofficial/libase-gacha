@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LIBASE ガチャ管理画面</title>
+<title>LIBASE ポイント管理画面</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, sans-serif; background: #f5f5f5; color: #333; }
@@ -30,6 +30,9 @@
   .btn-danger { background: #e74c3c; color: #fff; }
   .btn-edit { background: #f0f0f0; color: #333; }
   .btn-code { background: #4a9eff; color: #fff; }
+  .btn-reply { background: #2ecc71; color: #fff; }
+  .btn-hide { background: #f39c12; color: #fff; }
+  .btn-show { background: #2ecc71; color: #fff; }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .form-group { display: flex; flex-direction: column; gap: 4px; }
   .form-group label { font-size: 13px; color: #666; }
@@ -46,15 +49,21 @@
   .code-used { color: #aaa; text-decoration: line-through; }
   .badge-used { background: #aaa; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
   .badge-available { background: #2ecc71; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+  .badge-published { background: #2ecc71; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+  .badge-hidden { background: #aaa; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+  .stars { color: #f1c40f; font-size: 16px; }
+  .review-body { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reply-text { font-size: 12px; color: #4a9eff; margin-top: 4px; }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>🎰 LIBASE ガチャ管理画面</h1>
+  <h1>💎 LIBASE ポイント管理画面</h1>
   <div class="tabs">
     <button class="tab active" onclick="showSection('rewards', this)">景品管理</button>
     <button class="tab" onclick="showSection('history', this)">当選履歴</button>
+    <button class="tab" onclick="showSection('reviews', this)">レビュー管理</button>
   </div>
 </div>
 
@@ -138,14 +147,36 @@
         <thead>
           <tr>
             <th>日時</th>
-<th>顧客名</th>
-<th>メール</th>
-<th>当選景品</th>
-<th>使用ポイント</th>
-<th>発行コード</th>
+            <th>顧客名</th>
+            <th>メール</th>
+            <th>当選景品</th>
+            <th>使用ポイント</th>
+            <th>発行コード</th>
           </tr>
         </thead>
         <tbody id="history-table"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- レビュー管理 -->
+  <div id="section-reviews" class="section">
+    <div class="card">
+      <h2>レビュー一覧</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>日時</th>
+            <th>投稿者</th>
+            <th>商品名</th>
+            <th>評価</th>
+            <th>内容</th>
+            <th>返信</th>
+            <th>状態</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="reviews-table"></tbody>
       </table>
     </div>
   </div>
@@ -211,20 +242,36 @@
   <div class="modal-content">
     <h3 id="code-modal-title">外部コード管理</h3>
     <input type="hidden" id="code-reward-id">
-
     <div class="form-group" style="margin-bottom:16px;">
       <label>コードを追加（1行1コード）</label>
-      <textarea id="add-codes" placeholder="STARBUCKS-ABC123&#10;STARBUCKS-DEF456&#10;STARBUCKS-GHI789"></textarea>
+      <textarea id="add-codes" placeholder="STARBUCKS-ABC123&#10;STARBUCKS-DEF456"></textarea>
     </div>
     <div class="form-actions" style="margin-bottom:16px;">
       <button class="btn btn-primary" onclick="addExternalCodes()">追加する</button>
     </div>
-
     <h4 style="font-size:14px;margin-bottom:8px;">登録済みコード</h4>
     <div id="external-codes-list"></div>
-
     <div class="form-actions" style="margin-top:16px;">
       <button class="btn btn-edit" onclick="closeModal('code-modal')">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<!-- レビュー返信モーダル -->
+<div class="modal" id="reply-modal">
+  <div class="modal-content">
+    <h3>レビューに返信</h3>
+    <input type="hidden" id="reply-review-id">
+    <div style="background:#f9f9f9;border-radius:8px;padding:12px;margin-bottom:16px;">
+      <div id="reply-review-content"></div>
+    </div>
+    <div class="form-group">
+      <label>返信内容</label>
+      <textarea id="reply-text" placeholder="返信を入力してください..." style="min-height:120px;"></textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="submitReply()">返信する</button>
+      <button class="btn btn-edit" onclick="closeModal('reply-modal')">キャンセル</button>
     </div>
   </div>
 </div>
@@ -253,8 +300,19 @@ function showSection(name, el) {
   el.classList.add('active');
   if (name === 'history') loadHistory();
   if (name === 'rewards') loadRewards();
+  if (name === 'reviews') loadReviews();
 }
 
+function formatDate(str) {
+  const d = new Date(str);
+  return d.getFullYear() + '/' + (d.getMonth()+1) + '/' + d.getDate() + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
+function starsHtml(rating) {
+  return '★'.repeat(rating) + '☆'.repeat(5 - rating);
+}
+
+// ===== 景品管理 =====
 async function loadRewards() {
   const res = await fetch('/admin/api/rewards');
   const rewards = await res.json();
@@ -274,26 +332,6 @@ async function loadRewards() {
       </td>
     </tr>
   `).join('');
-}
-
-async function loadHistory() {
-  const res = await fetch('/admin/api/history');
-  const history = await res.json();
-  const tbody = document.getElementById('history-table');
-  tbody.innerHTML = history.map(h => {
-    const d = new Date(h.created_at);
-    const date = d.getFullYear() + '/' + (d.getMonth()+1) + '/' + d.getDate() + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
-    return `
-  <tr>
-    <td>${date}</td>
-    <td>${h.customer_name || '-'}</td>
-    <td>${h.customer_email || '-'}</td>
-    <td>${h.reward_name}</td>
-    <td>${h.points_used}pt</td>
-    <td>${h.reward_code || '-'}</td>
-  </tr>
-`;
-  }).join('');
 }
 
 async function addReward() {
@@ -355,6 +393,24 @@ async function saveEdit() {
   loadRewards();
 }
 
+// ===== 当選履歴 =====
+async function loadHistory() {
+  const res = await fetch('/admin/api/history');
+  const history = await res.json();
+  const tbody = document.getElementById('history-table');
+  tbody.innerHTML = history.map(h => `
+    <tr>
+      <td>${formatDate(h.created_at)}</td>
+      <td>${h.customer_name || '-'}</td>
+      <td>${h.customer_email || '-'}</td>
+      <td>${h.reward_name}</td>
+      <td>${h.points_used}pt</td>
+      <td>${h.reward_code || '-'}</td>
+    </tr>
+  `).join('');
+}
+
+// ===== 外部コード管理 =====
 async function openCodeManager(rewardId, rewardName) {
   document.getElementById('code-reward-id').value = rewardId;
   document.getElementById('code-modal-title').textContent = `外部コード管理：${rewardName}`;
@@ -401,6 +457,81 @@ async function deleteExternalCode(id) {
   await fetch('/admin/api/external-codes/' + id, { method: 'DELETE' });
   const rewardId = document.getElementById('code-reward-id').value;
   await loadExternalCodes(rewardId);
+}
+
+// ===== レビュー管理 =====
+async function loadReviews() {
+  const res = await fetch('/admin/api/reviews');
+  const reviews = await res.json();
+  const tbody = document.getElementById('reviews-table');
+  if (reviews.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#aaa;padding:24px;">レビューはまだありません</td></tr>';
+    return;
+  }
+  tbody.innerHTML = reviews.map(r => `
+    <tr>
+      <td style="white-space:nowrap;">${formatDate(r.created_at)}</td>
+      <td>
+        <div>${r.author_name || '-'}</div>
+        <div style="font-size:12px;color:#aaa;">${r.email || ''}</div>
+      </td>
+      <td style="font-size:13px;">${r.product_name || '-'}</td>
+      <td><span class="stars">${starsHtml(r.rating)}</span></td>
+      <td>
+        ${r.title ? `<div style="font-weight:bold;font-size:13px;">${r.title}</div>` : ''}
+        <div class="review-body">${r.body || '-'}</div>
+        ${r.image_url ? `<a href="${r.image_url}" target="_blank" style="font-size:12px;color:#4a9eff;">画像あり</a>` : ''}
+      </td>
+      <td>
+        ${r.reply
+          ? `<div class="reply-text">✅ 返信済み</div>`
+          : `<span style="font-size:12px;color:#aaa;">未返信</span>`
+        }
+      </td>
+      <td>
+        <span class="badge-${r.status}">${r.status === 'published' ? '公開中' : '非公開'}</span>
+      </td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn btn-reply" onclick="openReply(${r.id}, '${(r.author_name||'').replace(/'/g,"\\'")}', ${r.rating}, '${(r.body||'').replace(/'/g,"\\'").replace(/\n/g,' ')}', '${(r.reply||'').replace(/'/g,"\\'")}')">返信</button>
+        ${r.status === 'published'
+          ? `<button class="btn btn-hide" onclick="toggleStatus(${r.id}, 'hidden')">非公開</button>`
+          : `<button class="btn btn-show" onclick="toggleStatus(${r.id}, 'published')">公開</button>`
+        }
+      </td>
+    </tr>
+  `).join('');
+}
+
+function openReply(id, authorName, rating, body, existingReply) {
+  document.getElementById('reply-review-id').value = id;
+  document.getElementById('reply-review-content').innerHTML = `
+    <div style="font-size:13px;color:#666;margin-bottom:4px;">${authorName} ・ <span class="stars">${starsHtml(rating)}</span></div>
+    <div style="font-size:14px;">${body}</div>
+  `;
+  document.getElementById('reply-text').value = existingReply || '';
+  document.getElementById('reply-modal').classList.add('open');
+}
+
+async function submitReply() {
+  const id = document.getElementById('reply-review-id').value;
+  const reply = document.getElementById('reply-text').value.trim();
+  if (!reply) return alert('返信内容を入力してください');
+  await fetch('/admin/api/reviews/' + id + '/reply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reply })
+  });
+  closeModal('reply-modal');
+  loadReviews();
+}
+
+async function toggleStatus(id, status) {
+  await fetch('/admin/api/reviews/' + id + '/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+  loadReviews();
 }
 
 function closeModal(id) {
