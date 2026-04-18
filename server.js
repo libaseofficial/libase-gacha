@@ -14,7 +14,6 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-// 既存の app.use(express.json()); を以下に置き換え
 app.use((req, res, next) => {
   if (req.path === '/webhook/orders-paid') {
     express.raw({ type: 'application/json' })(req, res, next);
@@ -72,10 +71,8 @@ async function draw() {
 async function issueRewardCode(reward) {
   if (!ACCESS_TOKEN) return null;
 
-  // 手動対応
   if (reward.reward_type === 'manual') return null;
 
-  // 外部コード（スタバ・アマギフ等）
   if (reward.reward_type === 'external') {
     const result = await pool.query(
       "SELECT * FROM external_codes WHERE reward_id = $1 AND status = 'available' LIMIT 1",
@@ -90,7 +87,6 @@ async function issueRewardCode(reward) {
     return externalCode.code;
   }
 
-  // 割引コード・送料無料（Shopify自動発行）
   try {
     const priceRuleRes = await fetch(
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules.json`,
@@ -157,7 +153,6 @@ app.get('/callback', async (req, res) => {
   const data = await response.json();
   ACCESS_TOKEN = data.access_token;
 
-  // Supabaseに保存
   await pool.query(
     "INSERT INTO settings (key, value) VALUES ('shopify_access_token', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
     [ACCESS_TOKEN]
@@ -313,10 +308,8 @@ app.get('/admin/api/history', adminAuth, async (_req, res) => {
     return res.json(history);
   }
 
-  // 顧客IDのリストを取得
   const customerIds = [...new Set(history.map(h => h.customer_id))];
 
-  // Shopify APIで顧客情報を取得
   const customerMap = {};
   for (const id of customerIds) {
     try {
@@ -378,11 +371,11 @@ setInterval(async () => {
   }
 }, 1000 * 60 * 60 * 24 * 6);
 
+// Webhook
 const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
 const POINT_RATE = 1; // ¥100 = 1ポイント
 
 app.post('/webhook/orders-paid', async (req, res) => {
-  // ① HMAC署名検証
   const hmac = req.headers['x-shopify-hmac-sha256'];
   const hash = crypto
     .createHmac('sha256', SHOPIFY_WEBHOOK_SECRET)
@@ -395,19 +388,16 @@ app.post('/webhook/orders-paid', async (req, res) => {
 
   const order = JSON.parse(req.body);
 
-  // ② 顧客IDがない注文はスキップ（ゲスト購入等）
   const customerId = order.customer?.id?.toString();
   const email = order.customer?.email || '';
   if (!customerId) return res.status(200).send('no customer');
 
-  // ③ 重複チェック（同じorder_idで2回処理しない）
   const dup = await pool.query(
     "SELECT id FROM point_logs WHERE order_id = $1 AND type = 'purchase'",
     [order.id.toString()]
   );
   if (dup.rows.length > 0) return res.status(200).send('already processed');
 
-  // ④ ポイント計算（税抜き合計金額 ÷ 100）
   const totalPrice = parseFloat(order.subtotal_price || order.total_price || 0);
   const pointsToAdd = Math.floor(totalPrice / 100) * POINT_RATE;
   if (pointsToAdd <= 0) return res.status(200).send('no points');
@@ -415,7 +405,6 @@ app.post('/webhook/orders-paid', async (req, res) => {
   const shopDomain = SHOPIFY_SHOP;
 
   try {
-    // ⑤ customer_points にアップサート
     await pool.query(
       `INSERT INTO customer_points (customer_id, shop_domain, email, points, total_earned)
        VALUES ($1, $2, $3, $4, $4)
@@ -428,17 +417,10 @@ app.post('/webhook/orders-paid', async (req, res) => {
       [customerId, shopDomain, email, pointsToAdd]
     );
 
-    // ⑥ point_logs に履歴記録
     await pool.query(
       `INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason, order_id)
        VALUES ($1, $2, $3, 'purchase', $4, $5)`,
-      [
-        customerId,
-        shopDomain,
-        pointsToAdd,
-        `注文 #${order.order_number} 購入ポイント`,
-        order.id.toString()
-      ]
+      [customerId, shopDomain, pointsToAdd, `注文 #${order.order_number} 購入ポイント`, order.id.toString()]
     );
 
     console.log(`✅ ポイント付与: customer=${customerId} +${pointsToAdd}pt (注文#${order.order_number})`);
@@ -446,6 +428,115 @@ app.post('/webhook/orders-paid', async (req, res) => {
   } catch (e) {
     console.error('Webhook error:', e);
     res.status(500).send('error');
+  }
+});
+
+// レビューAPI
+const REVIEW_POINTS = 500;
+
+app.post('/reviews', async (req, res) => {
+  const { customerId, productId, productName, authorName, email, rating, title, body, imageUrl } = req.body;
+
+  if (!customerId || !productId || !rating) {
+    return res.json({ ok: false, message: '必須項目が不足しています' });
+  }
+
+  const shopDomain = SHOPIFY_SHOP;
+
+  try {
+    const dup = await pool.query(
+      'SELECT id FROM reviews WHERE customer_id = $1 AND product_id = $2',
+      [customerId, productId]
+    );
+    if (dup.rows.length > 0) {
+      return res.json({ ok: false, message: 'この商品はすでにレビュー済みです' });
+    }
+
+    await pool.query(
+      `INSERT INTO reviews (customer_id, shop_domain, product_id, product_name, author_name, email, rating, title, body, image_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [customerId, shopDomain, productId, productName, authorName, email, rating, title, body, imageUrl]
+    );
+
+    await pool.query(
+      `INSERT INTO customer_points (customer_id, shop_domain, points, total_earned)
+       VALUES ($1, $2, $3, $3)
+       ON CONFLICT (customer_id, shop_domain)
+       DO UPDATE SET
+         points = customer_points.points + $3,
+         total_earned = customer_points.total_earned + $3,
+         updated_at = NOW()`,
+      [customerId, shopDomain, REVIEW_POINTS]
+    );
+
+    await pool.query(
+      `INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason)
+       VALUES ($1, $2, $3, 'review', 'レビュー投稿ポイント')`,
+      [customerId, shopDomain, REVIEW_POINTS]
+    );
+
+    console.log(`✅ レビューポイント付与: customer=${customerId} +${REVIEW_POINTS}pt`);
+    res.json({ ok: true, points: REVIEW_POINTS });
+
+  } catch (e) {
+    console.error('Review error:', e);
+    res.json({ ok: false, message: 'エラーが発生しました' });
+  }
+});
+
+app.get('/reviews', async (req, res) => {
+  const { productId } = req.query;
+  if (!productId) return res.json({ ok: false, reviews: [] });
+
+  try {
+    const result = await pool.query(
+      `SELECT author_name, rating, title, body, image_url, reply, replied_at, created_at
+       FROM reviews WHERE product_id = $1 AND status = 'published' ORDER BY created_at DESC`,
+      [productId]
+    );
+    res.json({ ok: true, reviews: result.rows });
+  } catch (e) {
+    res.json({ ok: false, reviews: [] });
+  }
+});
+
+// 管理画面: レビュー一覧
+app.get('/admin/api/reviews', adminAuth, async (_req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM reviews ORDER BY created_at DESC'
+    );
+    res.json(result.rows);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+// 管理画面: レビューに返信
+app.post('/admin/api/reviews/:id/reply', adminAuth, async (req, res) => {
+  const { reply } = req.body;
+  try {
+    await pool.query(
+      'UPDATE reviews SET reply = $1, replied_at = NOW(), updated_at = NOW() WHERE id = $2',
+      [reply, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.json({ ok: false });
+  }
+});
+
+// 管理画面: レビューの公開/非公開切り替え
+app.post('/admin/api/reviews/:id/status', adminAuth, async (req, res) => {
+  const { status } = req.body;
+  try {
+    await pool.query(
+      'UPDATE reviews SET status = $1, updated_at = NOW() WHERE id = $2',
+      [status, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.json({ ok: false });
   }
 });
 
