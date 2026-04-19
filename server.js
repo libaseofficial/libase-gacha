@@ -517,6 +517,63 @@ setInterval(async () => {
   }
 }, 1000 * 60 * 60 * 24 * 6);
 
+// 管理画面: ポイント一覧
+app.get('/admin/api/points', adminAuth, async (_req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT customer_id, email, points, total_earned FROM customer_points WHERE shop_domain = $1 ORDER BY points DESC',
+      [SHOPIFY_SHOP]
+    );
+    res.json(result.rows);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+// 管理画面: ポイント手動変更
+app.post('/admin/api/points/:customerId', adminAuth, async (req, res) => {
+  const { customerId } = req.params;
+  const { type, amount, reason } = req.body;
+
+  try {
+    let newPoints;
+    if (type === 'add') {
+      await pool.query(
+        'UPDATE customer_points SET points = points + $1, total_earned = total_earned + $1, updated_at = NOW() WHERE customer_id = $2 AND shop_domain = $3',
+        [amount, customerId, SHOPIFY_SHOP]
+      );
+      newPoints = amount;
+    } else if (type === 'subtract') {
+      await pool.query(
+        'UPDATE customer_points SET points = GREATEST(points - $1, 0), updated_at = NOW() WHERE customer_id = $2 AND shop_domain = $3',
+        [amount, customerId, SHOPIFY_SHOP]
+      );
+      newPoints = -amount;
+    } else if (type === 'set') {
+      const current = await pool.query(
+        'SELECT points FROM customer_points WHERE customer_id = $1 AND shop_domain = $2',
+        [customerId, SHOPIFY_SHOP]
+      );
+      const currentPoints = current.rows[0]?.points || 0;
+      newPoints = amount - currentPoints;
+      await pool.query(
+        'UPDATE customer_points SET points = $1, updated_at = NOW() WHERE customer_id = $2 AND shop_domain = $3',
+        [amount, customerId, SHOPIFY_SHOP]
+      );
+    }
+
+    await pool.query(
+      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason) VALUES ($1, $2, $3, 'manual', $4)",
+      [customerId, SHOPIFY_SHOP, newPoints, reason]
+    );
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.json({ ok: false });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Gacha running on port ${PORT}`);
 });
