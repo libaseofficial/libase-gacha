@@ -64,7 +64,6 @@
     <button class="tab active" onclick="showSection('rewards', this)">景品管理</button>
     <button class="tab" onclick="showSection('history', this)">当選履歴</button>
     <button class="tab" onclick="showSection('reviews', this)">レビュー管理</button>
-    <button class="tab" onclick="showSection('points', this)">ポイント管理</button>
   </div>
 </div>
 
@@ -164,85 +163,24 @@
   <div id="section-reviews" class="section">
     <div class="card">
       <h2>レビュー一覧</h2>
-      <div style="overflow-x:auto;">
-        <table style="min-width:900px;">
-          <thead>
-            <tr>
-              <th style="min-width:120px;">日時</th>
-              <th style="min-width:140px;">投稿者</th>
-              <th style="min-width:80px;">商品名</th>
-              <th style="min-width:100px;">評価</th>
-              <th style="min-width:180px;">内容</th>
-              <th style="min-width:80px;">返信</th>
-              <th style="min-width:60px;">状態</th>
-              <th style="min-width:160px;">操作</th>
-            </tr>
-          </thead>
-          <tbody id="reviews-table"></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-</div>
-
-  <!-- ポイント管理 -->
-  <div id="section-points" class="section">
-    <div class="card">
-      <h2>顧客ポイント管理</h2>
-      <div style="display:flex;gap:8px;margin-bottom:16px;">
-        <input type="text" id="point-search" placeholder="メールアドレスで検索..." style="flex:1;padding:8px 10px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
-        <button class="btn btn-primary" onclick="searchPoints()">検索</button>
-        <button class="btn btn-edit" onclick="loadPoints()">全件表示</button>
-      </div>
       <table>
         <thead>
           <tr>
-            <th>メール</th>
-            <th>顧客ID</th>
-            <th style="text-align:right;">ポイント残高</th>
-            <th style="text-align:right;">累計獲得</th>
+            <th>日時</th>
+            <th>投稿者</th>
+            <th>商品名</th>
+            <th>評価</th>
+            <th>内容</th>
+            <th>返信</th>
+            <th>状態</th>
             <th>操作</th>
           </tr>
         </thead>
-        <tbody id="points-table"></tbody>
+        <tbody id="reviews-table"></tbody>
       </table>
     </div>
   </div>
 
-</div>
-
-<!-- ポイント編集モーダル -->
-<div class="modal" id="point-modal">
-  <div class="modal-content">
-    <h3>ポイントを変更</h3>
-    <input type="hidden" id="point-customer-id">
-    <div style="margin-bottom:16px;">
-      <div style="font-size:13px;color:#666;margin-bottom:4px;">対象顧客</div>
-      <div id="point-customer-email" style="font-size:14px;font-weight:bold;"></div>
-      <div style="font-size:13px;color:#666;margin-top:8px;">現在のポイント：<strong><span id="point-current"></span>pt</strong></div>
-    </div>
-    <div class="form-group" style="margin-bottom:12px;">
-      <label>変更タイプ</label>
-      <select id="point-type">
-        <option value="add">追加（+）</option>
-        <option value="subtract">減算（-）</option>
-        <option value="set">直接指定</option>
-      </select>
-    </div>
-    <div class="form-group" style="margin-bottom:12px;">
-      <label>ポイント数</label>
-      <input type="number" id="point-amount" placeholder="例：500" min="0">
-    </div>
-    <div class="form-group" style="margin-bottom:16px;">
-      <label>理由（任意）</label>
-      <input type="text" id="point-reason" placeholder="例：キャンペーン付与">
-    </div>
-    <div class="form-actions">
-      <button class="btn btn-primary" onclick="submitPointChange()">変更する</button>
-      <button class="btn btn-edit" onclick="closeModal('point-modal')">キャンセル</button>
-    </div>
-  </div>
 </div>
 
 <!-- 景品編集モーダル -->
@@ -363,7 +301,6 @@ function showSection(name, el) {
   if (name === 'history') loadHistory();
   if (name === 'rewards') loadRewards();
   if (name === 'reviews') loadReviews();
-  if (name === 'points') loadPoints();
 }
 
 function formatDate(str) {
@@ -520,74 +457,6 @@ async function deleteExternalCode(id) {
   await fetch('/admin/api/external-codes/' + id, { method: 'DELETE' });
   const rewardId = document.getElementById('code-reward-id').value;
   await loadExternalCodes(rewardId);
-}
-
-// ===== ポイント管理 =====
-let allPointsData = [];
-
-async function loadPoints() {
-  const res = await fetch('/admin/api/points');
-  allPointsData = await res.json();
-  renderPointsTable(allPointsData);
-}
-
-function searchPoints() {
-  const q = document.getElementById('point-search').value.trim().toLowerCase();
-  const filtered = allPointsData.filter(p => p.email && p.email.toLowerCase().includes(q));
-  renderPointsTable(filtered);
-}
-
-function renderPointsTable(data) {
-  const tbody = document.getElementById('points-table');
-  if (data.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#aaa;padding:24px;">データがありません</td></tr>';
-    return;
-  }
-  tbody.innerHTML = data.map(p => `
-    <tr>
-      <td>${p.email || '-'}</td>
-      <td style="font-size:12px;color:#aaa;">${p.customer_id}</td>
-      <td style="text-align:right;font-weight:bold;">${p.points}pt</td>
-      <td style="text-align:right;color:#aaa;">${p.total_earned}pt</td>
-      <td>
-        <button class="btn btn-edit" onclick="openPointModal('${p.customer_id}', '${(p.email||'').replace(/'/g,"\'")}', ${p.points})">変更</button>
-      </td>
-    </tr>
-  `).join('');
-}
-
-function openPointModal(customerId, email, currentPoints) {
-  document.getElementById('point-customer-id').value = customerId;
-  document.getElementById('point-customer-email').textContent = email || customerId;
-  document.getElementById('point-current').textContent = currentPoints;
-  document.getElementById('point-amount').value = '';
-  document.getElementById('point-reason').value = '';
-  document.getElementById('point-type').value = 'add';
-  document.getElementById('point-modal').classList.add('open');
-}
-
-async function submitPointChange() {
-  const customerId = document.getElementById('point-customer-id').value;
-  const type = document.getElementById('point-type').value;
-  const amount = parseInt(document.getElementById('point-amount').value);
-  const reason = document.getElementById('point-reason').value || '管理者による手動変更';
-
-  if (!amount || amount <= 0) return alert('ポイント数を入力してください');
-
-  const res = await fetch('/admin/api/points/' + customerId, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type, amount, reason })
-  });
-  const data = await res.json();
-
-  if (data.ok) {
-    closeModal('point-modal');
-    loadPoints();
-    alert('✅ ポイントを変更しました');
-  } else {
-    alert('エラーが発生しました');
-  }
 }
 
 // ===== レビュー管理 =====
