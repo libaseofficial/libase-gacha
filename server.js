@@ -286,7 +286,14 @@ app.post('/spin-with-points', async (req, res) => {
     );
 
     console.log(`✅ ガチャ: customer=${customerId} -${GACHA_COST}pt → ${reward.name}`);
-    res.json({ ok: true, reward: reward.name, rarity: reward.rarity || 'normal', rewardCode, rewardType: reward.reward_type });
+    res.json({
+      ok: true,
+      reward: reward.name,
+      rarity: reward.rarity || 'normal',
+      rewardCode,
+      rewardType: reward.reward_type,
+      imageUrl: reward.image_url || null
+    });
   } catch (e) {
     console.error('spin-with-points error:', e);
     res.json({ ok: false, message: 'エラーが発生しました' });
