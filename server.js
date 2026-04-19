@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use((req, res, next) => {
-  if (req.path === '/webhook/orders-paid') {
+  if (req.path === '/webhook/orders-paid' || req.path === '/webhook/orders-cancelled') {
     express.raw({ type: 'application/json' })(req, res, next);
   } else {
     express.json()(req, res, next);
@@ -571,6 +571,54 @@ app.post('/admin/api/points/:customerId', adminAuth, async (req, res) => {
   } catch (e) {
     console.error(e);
     res.json({ ok: false });
+  }
+});
+
+// キャンセル時ポイント取り消し
+app.post('/webhook/orders-cancelled', async (req, res) => {
+  const hmac = req.headers['x-shopify-hmac-sha256'];
+  const hash = crypto
+    .createHmac('sha256', SHOPIFY_WEBHOOK_SECRET)
+    .update(req.body)
+    .digest('base64');
+  if (hmac !== hash) {
+    console.warn('Webhook: invalid signature');
+    return res.status(401).send('Unauthorized');
+  }
+
+  const order = JSON.parse(req.body);
+  const customerId = order.customer?.id?.toString();
+  if (!customerId) return res.status(200).send('no customer');
+
+  try {
+    // 元の付与ログを確認
+    const log = await pool.query(
+      "SELECT points_change FROM point_logs WHERE order_id = $1 AND type = 'purchase'",
+      [order.id.toString()]
+    );
+    if (log.rows.length === 0) return res.status(200).send('no points to cancel');
+
+    const pointsToRemove = log.rows[0].points_change;
+
+    // ポイントを減算（0未満にはならない）
+    await pool.query(
+      `UPDATE customer_points SET points = GREATEST(points - $1, 0), updated_at = NOW()
+       WHERE customer_id = $2 AND shop_domain = $3`,
+      [pointsToRemove, customerId, SHOPIFY_SHOP]
+    );
+
+    // ログに記録
+    await pool.query(
+      `INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason, order_id)
+       VALUES ($1, $2, $3, 'manual', $4, $5)`,
+      [customerId, SHOPIFY_SHOP, -pointsToRemove, `注文 #${order.order_number} キャンセルによるポイント取り消し`, order.id.toString()]
+    );
+
+    console.log(`✅ ポイント取り消し: customer=${customerId} -${pointsToRemove}pt (注文#${order.order_number})`);
+    res.status(200).send('ok');
+  } catch (e) {
+    console.error('Cancel webhook error:', e);
+    res.status(500).send('error');
   }
 });
 
