@@ -630,6 +630,21 @@ app.post('/webhook/orders-cancelled', async (req, res) => {
   }
 });
 
+// ガチャ回数取得
+app.get('/gacha-count', async (req, res) => {
+  const { customerId } = req.query;
+  if (!customerId) return res.json({ ok: false, count: 0 });
+  try {
+    const result = await pool.query(
+      'SELECT COUNT(*) FROM gacha_history WHERE customer_id = $1',
+      [customerId]
+    );
+    res.json({ ok: true, count: parseInt(result.rows[0].count) });
+  } catch (e) {
+    res.json({ ok: false, count: 0 });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Gacha running on port ${PORT}`);
 });
