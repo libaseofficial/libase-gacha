@@ -33,7 +33,6 @@ const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 let ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN || '';
 
-// 起動時にSupabaseからトークンを読み込む
 async function loadAccessToken() {
   try {
     const result = await pool.query(
@@ -70,7 +69,6 @@ async function draw() {
 
 async function issueRewardCode(reward) {
   if (!ACCESS_TOKEN) return null;
-
   if (reward.reward_type === 'manual') return null;
 
   if (reward.reward_type === 'external') {
@@ -92,10 +90,7 @@ async function issueRewardCode(reward) {
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules.json`,
       {
         method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': ACCESS_TOKEN,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           price_rule: {
             title: `GACHA-${reward.name}`,
@@ -113,16 +108,12 @@ async function issueRewardCode(reward) {
     );
     const priceRuleData = await priceRuleRes.json();
     const priceRuleId = priceRuleData.price_rule.id;
-
     const code = 'GACHA-' + Math.random().toString(36).substring(2, 10).toUpperCase();
     const discountRes = await fetch(
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules/${priceRuleId}/discount_codes.json`,
       {
         method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': ACCESS_TOKEN,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({ discount_code: { code } })
       }
     );
@@ -134,9 +125,7 @@ async function issueRewardCode(reward) {
   }
 }
 
-app.get('/', (_req, res) => {
-  res.send('LIBASE Gacha Server is running');
-});
+app.get('/', (_req, res) => res.send('LIBASE Gacha Server is running'));
 
 app.get('/install', (_req, res) => {
   const url = `https://${SHOPIFY_SHOP}/admin/oauth/authorize?client_id=${CLIENT_ID}&scope=read_price_rules,write_price_rules,read_discounts,write_discounts,read_customers&redirect_uri=https://libase-gacha.onrender.com/callback&state=gacha123`;
@@ -152,20 +141,16 @@ app.get('/callback', async (req, res) => {
   });
   const data = await response.json();
   ACCESS_TOKEN = data.access_token;
-
   await pool.query(
     "INSERT INTO settings (key, value) VALUES ('shopify_access_token', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
     [ACCESS_TOKEN]
   );
-
   res.send('インストール完了しました。このページを閉じてください。');
 });
 
 app.get('/points', async (req, res) => {
   const { customerId } = req.query;
-  if (!customerId || !ACCESS_TOKEN) {
-    return res.json({ ok: false, points: 0 });
-  }
+  if (!customerId || !ACCESS_TOKEN) return res.json({ ok: false, points: 0 });
   try {
     const response = await fetch(
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/customers/${customerId}/metafields.json`,
@@ -177,6 +162,22 @@ app.get('/points', async (req, res) => {
     const points = pointField ? parseInt(pointField.value) : 0;
     const lastGrantedAt = lastGrantedField ? lastGrantedField.value : null;
     res.json({ ok: true, points, lastGrantedAt });
+  } catch (e) {
+    res.json({ ok: false, points: 0 });
+  }
+});
+
+// 独自ポイント残高取得
+app.get('/my-points', async (req, res) => {
+  const { customerId } = req.query;
+  if (!customerId) return res.json({ ok: false, points: 0 });
+  try {
+    const result = await pool.query(
+      'SELECT points FROM customer_points WHERE customer_id = $1 AND shop_domain = $2',
+      [customerId, SHOPIFY_SHOP]
+    );
+    const points = result.rows.length > 0 ? result.rows[0].points : 0;
+    res.json({ ok: true, points });
   } catch (e) {
     res.json({ ok: false, points: 0 });
   }
@@ -199,10 +200,7 @@ app.get('/history', async (req, res) => {
 app.post('/verify', async (req, res) => {
   const { customerId, coupon } = req.body;
   try {
-    await pool.query(
-      'INSERT INTO spin_tickets (customer_id, coupon_code) VALUES ($1, $2)',
-      [customerId, coupon]
-    );
+    await pool.query('INSERT INTO spin_tickets (customer_id, coupon_code) VALUES ($1, $2)', [customerId, coupon]);
     res.json({ ok: true });
   } catch {
     res.json({ ok: false });
@@ -216,9 +214,7 @@ app.post('/spin', async (req, res) => {
       "SELECT * FROM spin_tickets WHERE coupon_code = $1 AND status = 'verified'",
       [coupon]
     );
-    if (ticketResult.rows.length === 0) {
-      return res.json({ ok: false });
-    }
+    if (ticketResult.rows.length === 0) return res.json({ ok: false });
     const ticket = ticketResult.rows[0];
 
     if (ACCESS_TOKEN) {
@@ -226,23 +222,17 @@ app.post('/spin', async (req, res) => {
         `https://${SHOPIFY_SHOP}/admin/api/2025-01/discount_codes/lookup.json?code=${coupon}`,
         { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
       );
-      if (!shopifyRes.ok) {
-        return res.json({ ok: false, message: '無効なコードです' });
-      }
+      if (!shopifyRes.ok) return res.json({ ok: false, message: '無効なコードです' });
       const shopifyData = await shopifyRes.json();
       const { id, price_rule_id } = shopifyData.discount_code;
       await fetch(
         `https://${SHOPIFY_SHOP}/admin/api/2025-01/price_rules/${price_rule_id}/discount_codes/${id}.json`,
-        {
-          method: 'DELETE',
-          headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN }
-        }
+        { method: 'DELETE', headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
       );
     }
 
     const reward = await draw();
     if (!reward) return res.json({ ok: false, message: '景品がありません' });
-
     const rewardCode = await issueRewardCode(reward);
 
     await pool.query('UPDATE rewards SET stock = stock - 1 WHERE id = $1', [reward.id]);
@@ -252,23 +242,58 @@ app.post('/spin', async (req, res) => {
       [customerId, reward.name, rewardCode]
     );
 
-    res.json({
-      ok: true,
-      reward: reward.name,
-      rarity: reward.rarity || 'normal',
-      rewardCode: rewardCode,
-      rewardType: reward.reward_type
-    });
+    res.json({ ok: true, reward: reward.name, rarity: reward.rarity || 'normal', rewardCode, rewardType: reward.reward_type });
   } catch (e) {
     console.error(e);
     res.json({ ok: false, message: 'エラーが発生しました' });
   }
 });
 
-// 管理画面
-app.get('/admin', adminAuth, (_req, res) => {
-  res.sendFile(join(__dirname, 'public', 'admin.html'));
+// ポイントでガチャを回す
+const GACHA_COST = 500;
+
+app.post('/spin-with-points', async (req, res) => {
+  const { customerId } = req.body;
+  if (!customerId) return res.json({ ok: false, message: 'ログインが必要です' });
+
+  try {
+    const pointResult = await pool.query(
+      'SELECT points FROM customer_points WHERE customer_id = $1 AND shop_domain = $2',
+      [customerId, SHOPIFY_SHOP]
+    );
+    if (pointResult.rows.length === 0 || pointResult.rows[0].points < GACHA_COST) {
+      return res.json({ ok: false, message: `ポイントが不足しています（必要：${GACHA_COST}pt）` });
+    }
+
+    const reward = await draw();
+    if (!reward) return res.json({ ok: false, message: '景品がありません' });
+    const rewardCode = await issueRewardCode(reward);
+
+    await pool.query(
+      'UPDATE customer_points SET points = points - $1, updated_at = NOW() WHERE customer_id = $2 AND shop_domain = $3',
+      [GACHA_COST, customerId, SHOPIFY_SHOP]
+    );
+
+    await pool.query(
+      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason) VALUES ($1, $2, $3, 'gacha', 'ガチャ消費')",
+      [customerId, SHOPIFY_SHOP, -GACHA_COST]
+    );
+
+    await pool.query(
+      'INSERT INTO gacha_history (customer_id, reward_name, reward_code, points_used) VALUES ($1, $2, $3, $4)',
+      [customerId, reward.name, rewardCode, GACHA_COST]
+    );
+
+    console.log(`✅ ガチャ: customer=${customerId} -${GACHA_COST}pt → ${reward.name}`);
+    res.json({ ok: true, reward: reward.name, rarity: reward.rarity || 'normal', rewardCode, rewardType: reward.reward_type });
+  } catch (e) {
+    console.error('spin-with-points error:', e);
+    res.json({ ok: false, message: 'エラーが発生しました' });
+  }
 });
+
+// 管理画面
+app.get('/admin', adminAuth, (_req, res) => res.sendFile(join(__dirname, 'public', 'admin.html')));
 
 app.get('/admin/api/rewards', adminAuth, async (_req, res) => {
   const result = await pool.query('SELECT * FROM rewards ORDER BY id');
@@ -299,17 +324,11 @@ app.delete('/admin/api/rewards/:id', adminAuth, async (req, res) => {
 });
 
 app.get('/admin/api/history', adminAuth, async (_req, res) => {
-  const result = await pool.query(
-    'SELECT * FROM gacha_history ORDER BY created_at DESC LIMIT 50'
-  );
+  const result = await pool.query('SELECT * FROM gacha_history ORDER BY created_at DESC LIMIT 50');
   const history = result.rows;
-
-  if (!ACCESS_TOKEN || history.length === 0) {
-    return res.json(history);
-  }
+  if (!ACCESS_TOKEN || history.length === 0) return res.json(history);
 
   const customerIds = [...new Set(history.map(h => h.customer_id))];
-
   const customerMap = {};
   for (const id of customerIds) {
     try {
@@ -329,16 +348,13 @@ app.get('/admin/api/history', adminAuth, async (_req, res) => {
     }
   }
 
-  const enriched = history.map(h => ({
+  res.json(history.map(h => ({
     ...h,
     customer_name: customerMap[h.customer_id]?.name || '-',
     customer_email: customerMap[h.customer_id]?.email || '-'
-  }));
-
-  res.json(enriched);
+  })));
 });
 
-// 外部コード管理API
 app.get('/admin/api/external-codes/:rewardId', adminAuth, async (req, res) => {
   const result = await pool.query(
     'SELECT * FROM external_codes WHERE reward_id = $1 ORDER BY created_at DESC',
@@ -350,9 +366,7 @@ app.get('/admin/api/external-codes/:rewardId', adminAuth, async (req, res) => {
 app.post('/admin/api/external-codes', adminAuth, async (req, res) => {
   const { reward_id, codes } = req.body;
   const values = codes.map(code => `(${reward_id}, '${code}')`).join(',');
-  await pool.query(
-    `INSERT INTO external_codes (reward_id, code) VALUES ${values}`
-  );
+  await pool.query(`INSERT INTO external_codes (reward_id, code) VALUES ${values}`);
   res.json({ ok: true });
 });
 
@@ -361,33 +375,104 @@ app.delete('/admin/api/external-codes/:id', adminAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Supabaseを定期的にpingして停止を防ぐ
-setInterval(async () => {
+// レビューAPI
+const REVIEW_POINTS = 500;
+
+app.post('/reviews', async (req, res) => {
+  const { customerId, productId, productName, authorName, email, rating, title, body, imageUrl } = req.body;
+  if (!customerId || !productId || !rating) return res.json({ ok: false, message: '必須項目が不足しています' });
+
+  const shopDomain = SHOPIFY_SHOP;
   try {
-    await pool.query('SELECT 1');
-    console.log('DB ping OK');
+    const dup = await pool.query(
+      'SELECT id FROM reviews WHERE customer_id = $1 AND product_id = $2',
+      [customerId, productId]
+    );
+    if (dup.rows.length > 0) return res.json({ ok: false, message: 'この商品はすでにレビュー済みです' });
+
+    await pool.query(
+      'INSERT INTO reviews (customer_id, shop_domain, product_id, product_name, author_name, email, rating, title, body, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+      [customerId, shopDomain, productId, productName, authorName, email, rating, title, body, imageUrl]
+    );
+
+    await pool.query(
+      `INSERT INTO customer_points (customer_id, shop_domain, points, total_earned) VALUES ($1, $2, $3, $3)
+       ON CONFLICT (customer_id, shop_domain) DO UPDATE SET points = customer_points.points + $3, total_earned = customer_points.total_earned + $3, updated_at = NOW()`,
+      [customerId, shopDomain, REVIEW_POINTS]
+    );
+
+    await pool.query(
+      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason) VALUES ($1, $2, $3, 'review', 'レビュー投稿ポイント')",
+      [customerId, shopDomain, REVIEW_POINTS]
+    );
+
+    console.log(`✅ レビューポイント付与: customer=${customerId} +${REVIEW_POINTS}pt`);
+    res.json({ ok: true, points: REVIEW_POINTS });
   } catch (e) {
-    console.error('DB ping failed:', e.message);
+    console.error('Review error:', e);
+    res.json({ ok: false, message: 'エラーが発生しました' });
   }
-}, 1000 * 60 * 60 * 24 * 6);
+});
+
+app.get('/reviews', async (req, res) => {
+  const { productId } = req.query;
+  if (!productId) return res.json({ ok: false, reviews: [] });
+  try {
+    const result = await pool.query(
+      "SELECT author_name, rating, title, body, image_url, reply, replied_at, created_at FROM reviews WHERE product_id = $1 AND status = 'published' ORDER BY created_at DESC",
+      [productId]
+    );
+    res.json({ ok: true, reviews: result.rows });
+  } catch (e) {
+    res.json({ ok: false, reviews: [] });
+  }
+});
+
+app.get('/admin/api/reviews', adminAuth, async (_req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+app.post('/admin/api/reviews/:id/reply', adminAuth, async (req, res) => {
+  const { reply } = req.body;
+  try {
+    await pool.query(
+      'UPDATE reviews SET reply = $1, replied_at = NOW(), updated_at = NOW() WHERE id = $2',
+      [reply, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.json({ ok: false });
+  }
+});
+
+app.post('/admin/api/reviews/:id/status', adminAuth, async (req, res) => {
+  const { status } = req.body;
+  try {
+    await pool.query('UPDATE reviews SET status = $1, updated_at = NOW() WHERE id = $2', [status, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.json({ ok: false });
+  }
+});
 
 // Webhook
 const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
-const POINT_RATE = 1; // ¥100 = 1ポイント
+const POINT_RATE = 1;
 
 app.post('/webhook/orders-paid', async (req, res) => {
   const hmac = req.headers['x-shopify-hmac-sha256'];
-  const hash = crypto
-    .createHmac('sha256', SHOPIFY_WEBHOOK_SECRET)
-    .update(req.body)
-    .digest('base64');
+  const hash = crypto.createHmac('sha256', SHOPIFY_WEBHOOK_SECRET).update(req.body).digest('base64');
   if (hmac !== hash) {
     console.warn('Webhook: invalid signature');
     return res.status(401).send('Unauthorized');
   }
 
   const order = JSON.parse(req.body);
-
   const customerId = order.customer?.id?.toString();
   const email = order.customer?.email || '';
   if (!customerId) return res.status(200).send('no customer');
@@ -402,25 +487,16 @@ app.post('/webhook/orders-paid', async (req, res) => {
   const pointsToAdd = Math.floor(totalPrice / 100) * POINT_RATE;
   if (pointsToAdd <= 0) return res.status(200).send('no points');
 
-  const shopDomain = SHOPIFY_SHOP;
-
   try {
     await pool.query(
-      `INSERT INTO customer_points (customer_id, shop_domain, email, points, total_earned)
-       VALUES ($1, $2, $3, $4, $4)
-       ON CONFLICT (customer_id, shop_domain)
-       DO UPDATE SET
-         points = customer_points.points + $4,
-         total_earned = customer_points.total_earned + $4,
-         email = EXCLUDED.email,
-         updated_at = NOW()`,
-      [customerId, shopDomain, email, pointsToAdd]
+      `INSERT INTO customer_points (customer_id, shop_domain, email, points, total_earned) VALUES ($1, $2, $3, $4, $4)
+       ON CONFLICT (customer_id, shop_domain) DO UPDATE SET points = customer_points.points + $4, total_earned = customer_points.total_earned + $4, email = EXCLUDED.email, updated_at = NOW()`,
+      [customerId, SHOPIFY_SHOP, email, pointsToAdd]
     );
 
     await pool.query(
-      `INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason, order_id)
-       VALUES ($1, $2, $3, 'purchase', $4, $5)`,
-      [customerId, shopDomain, pointsToAdd, `注文 #${order.order_number} 購入ポイント`, order.id.toString()]
+      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason, order_id) VALUES ($1, $2, $3, 'purchase', $4, $5)",
+      [customerId, SHOPIFY_SHOP, pointsToAdd, `注文 #${order.order_number} 購入ポイント`, order.id.toString()]
     );
 
     console.log(`✅ ポイント付与: customer=${customerId} +${pointsToAdd}pt (注文#${order.order_number})`);
@@ -431,114 +507,15 @@ app.post('/webhook/orders-paid', async (req, res) => {
   }
 });
 
-// レビューAPI
-const REVIEW_POINTS = 500;
-
-app.post('/reviews', async (req, res) => {
-  const { customerId, productId, productName, authorName, email, rating, title, body, imageUrl } = req.body;
-
-  if (!customerId || !productId || !rating) {
-    return res.json({ ok: false, message: '必須項目が不足しています' });
-  }
-
-  const shopDomain = SHOPIFY_SHOP;
-
+// Supabase ping
+setInterval(async () => {
   try {
-    const dup = await pool.query(
-      'SELECT id FROM reviews WHERE customer_id = $1 AND product_id = $2',
-      [customerId, productId]
-    );
-    if (dup.rows.length > 0) {
-      return res.json({ ok: false, message: 'この商品はすでにレビュー済みです' });
-    }
-
-    await pool.query(
-      `INSERT INTO reviews (customer_id, shop_domain, product_id, product_name, author_name, email, rating, title, body, image_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [customerId, shopDomain, productId, productName, authorName, email, rating, title, body, imageUrl]
-    );
-
-    await pool.query(
-      `INSERT INTO customer_points (customer_id, shop_domain, points, total_earned)
-       VALUES ($1, $2, $3, $3)
-       ON CONFLICT (customer_id, shop_domain)
-       DO UPDATE SET
-         points = customer_points.points + $3,
-         total_earned = customer_points.total_earned + $3,
-         updated_at = NOW()`,
-      [customerId, shopDomain, REVIEW_POINTS]
-    );
-
-    await pool.query(
-      `INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason)
-       VALUES ($1, $2, $3, 'review', 'レビュー投稿ポイント')`,
-      [customerId, shopDomain, REVIEW_POINTS]
-    );
-
-    console.log(`✅ レビューポイント付与: customer=${customerId} +${REVIEW_POINTS}pt`);
-    res.json({ ok: true, points: REVIEW_POINTS });
-
+    await pool.query('SELECT 1');
+    console.log('DB ping OK');
   } catch (e) {
-    console.error('Review error:', e);
-    res.json({ ok: false, message: 'エラーが発生しました' });
+    console.error('DB ping failed:', e.message);
   }
-});
-
-app.get('/reviews', async (req, res) => {
-  const { productId } = req.query;
-  if (!productId) return res.json({ ok: false, reviews: [] });
-
-  try {
-    const result = await pool.query(
-      `SELECT author_name, rating, title, body, image_url, reply, replied_at, created_at
-       FROM reviews WHERE product_id = $1 AND status = 'published' ORDER BY created_at DESC`,
-      [productId]
-    );
-    res.json({ ok: true, reviews: result.rows });
-  } catch (e) {
-    res.json({ ok: false, reviews: [] });
-  }
-});
-
-// 管理画面: レビュー一覧
-app.get('/admin/api/reviews', adminAuth, async (_req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM reviews ORDER BY created_at DESC'
-    );
-    res.json(result.rows);
-  } catch (e) {
-    res.json([]);
-  }
-});
-
-// 管理画面: レビューに返信
-app.post('/admin/api/reviews/:id/reply', adminAuth, async (req, res) => {
-  const { reply } = req.body;
-  try {
-    await pool.query(
-      'UPDATE reviews SET reply = $1, replied_at = NOW(), updated_at = NOW() WHERE id = $2',
-      [reply, req.params.id]
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    res.json({ ok: false });
-  }
-});
-
-// 管理画面: レビューの公開/非公開切り替え
-app.post('/admin/api/reviews/:id/status', adminAuth, async (req, res) => {
-  const { status } = req.body;
-  try {
-    await pool.query(
-      'UPDATE reviews SET status = $1, updated_at = NOW() WHERE id = $2',
-      [status, req.params.id]
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    res.json({ ok: false });
-  }
-});
+}, 1000 * 60 * 60 * 24 * 6);
 
 app.listen(PORT, () => {
   console.log(`Gacha running on port ${PORT}`);
