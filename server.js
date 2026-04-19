@@ -101,6 +101,7 @@ async function issueRewardCode(reward) {
             value: reward.reward_type === 'shipping' ? '-100.0' : `-${reward.discount_amount}.0`,
             customer_selection: 'all',
             starts_at: new Date().toISOString(),
+            ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
             usage_limit: 1
           }
         })
