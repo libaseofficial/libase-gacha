@@ -651,7 +651,7 @@ app.get('/my-orders', async (req, res) => {
   if (!customerId || !ACCESS_TOKEN) return res.json({ ok: false, products: [], reason: 'no token' });
   try {
     const ordersRes = await fetch(
-      `https://${SHOPIFY_SHOP}/admin/api/2025-01/customers/${customerId}/orders.json?status=any&limit=50`,
+      `https://${SHOPIFY_SHOP}/admin/api/2025-01/orders.json?customer_id=${customerId}&status=any&limit=50`,
       { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
     );
     const ordersData = await ordersRes.json();
