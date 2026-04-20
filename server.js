@@ -129,7 +129,7 @@ async function issueRewardCode(reward) {
 app.get('/', (_req, res) => res.send('LIBASE Gacha Server is running'));
 
 app.get('/install', (_req, res) => {
-  const url = `https://${SHOPIFY_SHOP}/admin/oauth/authorize?client_id=${CLIENT_ID}&scope=read_price_rules,write_price_rules,read_discounts,write_discounts,read_customers&redirect_uri=https://libase-gacha.onrender.com/callback&state=gacha123`;
+  const url = `https://${SHOPIFY_SHOP}/admin/oauth/authorize?client_id=${CLIENT_ID}&scope=read_price_rules,write_price_rules,read_discounts,write_discounts,read_customers,read_orders&redirect_uri=https://libase-gacha.onrender.com/callback&state=gacha123`;
   res.redirect(url);
 });
 
@@ -642,6 +642,50 @@ app.get('/gacha-count', async (req, res) => {
     res.json({ ok: true, count: parseInt(result.rows[0].count) });
   } catch (e) {
     res.json({ ok: false, count: 0 });
+  }
+});
+
+// 購入済み商品取得（レビュー未投稿のみ）
+app.get('/my-orders', async (req, res) => {
+  const { customerId } = req.query;
+  if (!customerId || !ACCESS_TOKEN) return res.json({ ok: false, products: [] });
+  try {
+    const ordersRes = await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/2025-01/customers/${customerId}/orders.json?status=any&limit=50`,
+      { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
+    );
+    const ordersData = await ordersRes.json();
+    const orders = ordersData.orders || [];
+
+    // 商品を重複なく抽出
+    const productMap = {};
+    for (const order of orders) {
+      for (const item of order.line_items || []) {
+        if (!productMap[item.product_id]) {
+          productMap[item.product_id] = {
+            productId: String(item.product_id),
+            productName: item.title,
+            imageUrl: item.image?.src || null
+          };
+        }
+      }
+    }
+
+    // レビュー済みの商品を除外
+    const productIds = Object.keys(productMap);
+    if (productIds.length === 0) return res.json({ ok: true, products: [] });
+
+    const reviewed = await pool.query(
+      'SELECT product_id FROM reviews WHERE customer_id = $1 AND product_id = ANY($2)',
+      [customerId, productIds]
+    );
+    const reviewedIds = new Set(reviewed.rows.map(r => r.product_id));
+    const products = Object.values(productMap).filter(p => !reviewedIds.has(p.productId));
+
+    res.json({ ok: true, products });
+  } catch (e) {
+    console.error('my-orders error:', e);
+    res.json({ ok: false, products: [] });
   }
 });
 
