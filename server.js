@@ -691,25 +691,6 @@ app.get('/my-orders', async (req, res) => {
   }
 });
 
-    const productIds = Object.keys(productMap);
-    console.log(`my-orders: products=${productIds.length}`);
-
-    if (productIds.length === 0) return res.json({ ok: true, products: [], reason: 'no orders' });
-
-    const reviewed = await pool.query(
-      'SELECT product_id FROM reviews WHERE customer_id = $1 AND product_id = ANY($2)',
-      [customerId, productIds]
-    );
-    const reviewedIds = new Set(reviewed.rows.map(r => r.product_id));
-    const products = Object.values(productMap).filter(p => !reviewedIds.has(p.productId));
-
-    console.log(`my-orders: reviewable=${products.length}`);
-    res.json({ ok: true, products });
-  } catch (e) {
-    console.error('my-orders error:', e);
-    res.json({ ok: false, products: [], error: e.message });
-  }
-});
 
 app.listen(PORT, () => {
   console.log(`Gacha running on port ${PORT}`);
