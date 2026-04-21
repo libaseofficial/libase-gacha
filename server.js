@@ -645,7 +645,6 @@ app.get('/gacha-count', async (req, res) => {
   }
 });
 
-// 購入済み商品取得（レビュー未投稿のみ）
 app.get('/my-orders', async (req, res) => {
   const { customerId } = req.query;
   if (!customerId || !ACCESS_TOKEN) return res.json({ ok: false, products: [], reason: 'no token' });
@@ -654,9 +653,10 @@ app.get('/my-orders', async (req, res) => {
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/orders.json?customer_id=${customerId}&status=any&limit=50`,
       { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
     );
-    const ordersData = await ordersRes.json();
+    const text = await ordersRes.text();
+    console.log(`my-orders raw: ${text.slice(0, 500)}`);
+    const ordersData = JSON.parse(text);
     const orders = ordersData.orders || [];
-
     console.log(`my-orders: customerId=${customerId} orders=${orders.length}`);
 
     const productMap = {};
@@ -671,6 +671,23 @@ app.get('/my-orders', async (req, res) => {
         }
       }
     }
+
+    const productIds = Object.keys(productMap);
+    if (productIds.length === 0) return res.json({ ok: true, products: [], reason: 'no orders' });
+
+    const reviewed = await pool.query(
+      'SELECT product_id FROM reviews WHERE customer_id = $1 AND product_id = ANY($2)',
+      [customerId, productIds]
+    );
+    const reviewedIds = new Set(reviewed.rows.map(r => r.product_id));
+    const products = Object.values(productMap).filter(p => !reviewedIds.has(p.productId));
+
+    res.json({ ok: true, products });
+  } catch (e) {
+    console.error('my-orders error:', e);
+    res.json({ ok: false, products: [], error: e.message });
+  }
+});
 
     const productIds = Object.keys(productMap);
     console.log(`my-orders: products=${productIds.length}`);
