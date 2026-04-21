@@ -673,7 +673,9 @@ app.get('/my-orders', async (req, res) => {
     }
 
     const productIds = Object.keys(productMap);
-    if (productIds.length === 0) return res.json({ ok: true, products: [], reason: 'no orders' });
+    if (productIds.length === 0) {
+      return res.json({ ok: true, products: [], reason: 'no orders' });
+    }
 
     const reviewed = await pool.query(
       'SELECT product_id FROM reviews WHERE customer_id = $1 AND product_id = ANY($2)',
