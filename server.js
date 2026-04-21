@@ -280,6 +280,11 @@ app.post('/spin-with-points', async (req, res) => {
       [customerId, SHOPIFY_SHOP, -GACHA_COST]
     );
 
+    await pool.query(
+      'INSERT INTO gacha_history (customer_id, reward_name, reward_code, points_used) VALUES ($1, $2, $3, $4)',
+      [customerId, reward.name, rewardCode, GACHA_COST]
+    );
+
     console.log(`✅ ガチャ: customer=${customerId} -${GACHA_COST}pt → ${reward.name}`);
     res.json({
       ok: true,
@@ -500,11 +505,6 @@ app.post('/webhook/orders-paid', async (req, res) => {
     await pool.query(
       "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason, order_id) VALUES ($1, $2, $3, 'purchase', $4, $5)",
       [customerId, SHOPIFY_SHOP, pointsToAdd, `注文 #${order.order_number} 購入ポイント`, order.id.toString()]
-    );
-
-    await pool.query(
-      'INSERT INTO gacha_history (customer_id, reward_name, reward_code, points_used) VALUES ($1, $2, $3, $4)',
-      [customerId, reward.name, rewardCode, GACHA_COST]
     );
 
     console.log(`✅ ポイント付与: customer=${customerId} +${pointsToAdd}pt (注文#${order.order_number})`);
