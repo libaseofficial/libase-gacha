@@ -502,6 +502,11 @@ app.post('/webhook/orders-paid', async (req, res) => {
       [customerId, SHOPIFY_SHOP, pointsToAdd, `注文 #${order.order_number} 購入ポイント`, order.id.toString()]
     );
 
+    await pool.query(
+      'INSERT INTO gacha_history (customer_id, reward_name, reward_code, points_used) VALUES ($1, $2, $3, $4)',
+      [customerId, reward.name, rewardCode, GACHA_COST]
+    );
+
     console.log(`✅ ポイント付与: customer=${customerId} +${pointsToAdd}pt (注文#${order.order_number})`);
     // ↓ここに追加
 for (const item of order.line_items || []) {
@@ -655,7 +660,7 @@ app.get('/my-orders', async (req, res) => {
   if (!customerId) return res.json({ ok: false, products: [] });
   try {
     const result = await pool.query(
-      `SELECT cp.product_id, cp.product_name
+      `SELECT cp.product_id, cp.product_name, cp.image_url
        FROM customer_products cp
        WHERE cp.customer_id = $1 AND cp.shop_domain = $2
        AND NOT EXISTS (
@@ -668,7 +673,7 @@ app.get('/my-orders', async (req, res) => {
     const products = result.rows.map(r => ({
       productId: r.product_id,
       productName: r.product_name,
-      imageUrl: null
+      imageUrl: r.image_url || null
     }));
     res.json({ ok: true, products });
   } catch (e) {
