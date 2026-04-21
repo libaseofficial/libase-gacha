@@ -508,6 +508,16 @@ app.post('/webhook/orders-paid', async (req, res) => {
     );
 
     console.log(`✅ ポイント付与: customer=${customerId} +${pointsToAdd}pt (注文#${order.order_number})`);
+    // ↓ここに追加
+for (const item of order.line_items || []) {
+  if (!item.product_id) continue;
+  await pool.query(
+    `INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
+    [customerId, SHOPIFY_SHOP, String(item.product_id), item.title]
+  );
+}
     res.status(200).send('ok');
   } catch (e) {
     console.error('Webhook error:', e);
@@ -647,47 +657,28 @@ app.get('/gacha-count', async (req, res) => {
 
 app.get('/my-orders', async (req, res) => {
   const { customerId } = req.query;
-  if (!customerId || !ACCESS_TOKEN) return res.json({ ok: false, products: [], reason: 'no token' });
+  if (!customerId) return res.json({ ok: false, products: [] });
   try {
-    const ordersRes = await fetch(
-      `https://${SHOPIFY_SHOP}/admin/api/2025-01/customers/${customerId}/orders.json?status=any&limit=50`,
-      { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
+    const result = await pool.query(
+      `SELECT cp.product_id, cp.product_name
+       FROM customer_products cp
+       WHERE cp.customer_id = $1 AND cp.shop_domain = $2
+       AND NOT EXISTS (
+         SELECT 1 FROM reviews r
+         WHERE r.customer_id = cp.customer_id
+         AND r.product_id = cp.product_id
+       )`,
+      [customerId, SHOPIFY_SHOP]
     );
-    const text = await ordersRes.text();
-    console.log(`my-orders raw: ${text.slice(0, 500)}`);
-    const ordersData = JSON.parse(text);
-    const orders = ordersData.orders || [];
-    console.log(`my-orders: customerId=${customerId} orders=${orders.length}`);
-
-    const productMap = {};
-    for (const order of orders) {
-      for (const item of order.line_items || []) {
-        if (!productMap[item.product_id]) {
-          productMap[item.product_id] = {
-            productId: String(item.product_id),
-            productName: item.title,
-            imageUrl: item.image?.src || null
-          };
-        }
-      }
-    }
-
-    const productIds = Object.keys(productMap);
-    if (productIds.length === 0) {
-      return res.json({ ok: true, products: [], reason: 'no orders' });
-    }
-
-    const reviewed = await pool.query(
-      'SELECT product_id FROM reviews WHERE customer_id = $1 AND product_id = ANY($2)',
-      [customerId, productIds]
-    );
-    const reviewedIds = new Set(reviewed.rows.map(r => r.product_id));
-    const products = Object.values(productMap).filter(p => !reviewedIds.has(p.productId));
-
+    const products = result.rows.map(r => ({
+      productId: r.product_id,
+      productName: r.product_name,
+      imageUrl: null
+    }));
     res.json({ ok: true, products });
   } catch (e) {
     console.error('my-orders error:', e);
-    res.json({ ok: false, products: [], error: e.message });
+    res.json({ ok: false, products: [] });
   }
 });
 
