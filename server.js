@@ -280,11 +280,6 @@ app.post('/spin-with-points', async (req, res) => {
       [customerId, SHOPIFY_SHOP, -GACHA_COST]
     );
 
-    await pool.query(
-      'INSERT INTO gacha_history (customer_id, reward_name, reward_code, points_used) VALUES ($1, $2, $3, $4)',
-      [customerId, reward.name, rewardCode, GACHA_COST]
-    );
-
     console.log(`✅ ガチャ: customer=${customerId} -${GACHA_COST}pt → ${reward.name}`);
     res.json({
       ok: true,
@@ -512,10 +507,10 @@ app.post('/webhook/orders-paid', async (req, res) => {
 for (const item of order.line_items || []) {
   if (!item.product_id) continue;
   await pool.query(
-    `INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
-    [customerId, SHOPIFY_SHOP, String(item.product_id), item.title]
+`INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name, image_url)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
+[customerId, SHOPIFY_SHOP, String(item.product_id), item.title, item.image?.src || null]
   );
 }
     res.status(200).send('ok');
