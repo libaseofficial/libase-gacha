@@ -5,6 +5,7 @@ import basicAuth from 'express-basic-auth';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import crypto from 'crypto';
+import multer from 'multer';
 
 const { Pool } = pkg;
 const __filename = fileURLToPath(import.meta.url);
@@ -12,6 +13,7 @@ const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const upload = multer({ dest: 'uploads/' });
 
 app.use(cors());
 app.use((req, res, next) => {
@@ -22,6 +24,7 @@ app.use((req, res, next) => {
   }
 });
 app.use(express.static(join(__dirname, 'public')));
+app.use('/uploads', express.static(join(__dirname, 'uploads')));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
