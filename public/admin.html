@@ -339,6 +339,8 @@
 </div>
 
 <script>
+const AUTH = 'Basic ' + btoa('admin:libase2024');
+
 const RARITY_LABELS = {
   normal: '⬜ Normal',
   rare: '🟦 Rare',
@@ -646,23 +648,47 @@ function openReply(id, authorName, rating, body, existingReply) {
 async function submitReply() {
   const id = document.getElementById('reply-review-id').value;
   const reply = document.getElementById('reply-text').value.trim();
+
   if (!reply) return alert('返信内容を入力してください');
-  await fetch('/admin/api/reviews/' + id + '/reply', {
+
+  const res = await fetch('/admin/api/reviews/' + id + '/reply', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': AUTH
+    },
     body: JSON.stringify({ reply })
   });
-  closeModal('reply-modal');
-  loadReviews();
+
+  const data = await res.json();
+
+  if (data.ok) {
+    closeModal('reply-modal');
+    loadReviews();
+    alert('✅ 返信しました');
+  } else {
+    alert('返信に失敗しました');
+  }
 }
 
 async function toggleStatus(id, status) {
-  await fetch('/admin/api/reviews/' + id + '/status', {
+  const res = await fetch('/admin/api/reviews/' + id + '/status', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': AUTH
+    },
     body: JSON.stringify({ status })
   });
-  loadReviews();
+
+  const data = await res.json();
+
+  if (data.ok) {
+    loadReviews();
+    alert(status === 'published' ? '✅ 公開にしました' : '✅ 非公開にしました');
+  } else {
+    alert('状態の変更に失敗しました');
+  }
 }
 
 function closeModal(id) {
