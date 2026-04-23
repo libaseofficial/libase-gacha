@@ -403,7 +403,18 @@ app.post('/reviews', async (req, res) => {
 
     await pool.query(
       'INSERT INTO reviews (customer_id, shop_domain, product_id, product_name, author_name, email, rating, title, body, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-      [customerId, shopDomain, productId, productName, authorName, email, rating, title, body, imageUrl]
+      [
+        customerId,
+        shopDomain,
+        productId,
+        productName,
+        authorName || '匿名',
+        email || null,
+        rating,
+        title || null,
+        body,
+        imageUrl || null
+      ]
     );
 
     await pool.query(
