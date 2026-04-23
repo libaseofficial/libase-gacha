@@ -411,7 +411,7 @@ app.post('/reviews', async (req, res) => {
     if (dup.rows.length > 0) return res.json({ ok: false, message: 'この商品はすでにレビュー済みです' });
 
     await pool.query(
-      'INSERT INTO reviews (customer_id, shop_domain, product_id, product_name, author_name, email, rating, title, body, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+      'INSERT INTO reviews (customer_id, shop_domain, product_id, product_name, author_name, email, rating, title, body, image_url, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
       [
         customerId,
         shopDomain,
@@ -422,7 +422,8 @@ app.post('/reviews', async (req, res) => {
         rating,
         title || null,
         body,
-        imageUrl || null
+        imageUrl || null,
+        'hidden'
       ]
     );
 
