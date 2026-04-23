@@ -386,6 +386,15 @@ app.delete('/admin/api/external-codes/:id', adminAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.json({ ok: false, message: 'ファイルがありません' });
+  }
+
+  const fileUrl = `https://libase-gacha.onrender.com/uploads/${req.file.filename}`;
+  res.json({ ok: true, url: fileUrl });
+});
+
 // レビューAPI
 const REVIEW_POINTS = 500;
 
@@ -529,7 +538,7 @@ for (const item of order.line_items || []) {
 `INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name, image_url)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
-[customerId, SHOPIFY_SHOP, String(item.product_id), item.title, item.image?.src || null]
+[customerId, SHOPIFY_SHOP,item.product_handle, item.title, item.image?.src || null]
   );
 }
     res.status(200).send('ok');
