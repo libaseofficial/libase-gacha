@@ -460,6 +460,35 @@ app.get('/reviews', async (req, res) => {
   }
 });
 
+app.get('/review-summary', async (req, res) => {
+  const { productId } = req.query;
+  if (!productId) {
+    return res.json({ ok: false, avg: 0, count: 0 });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT 
+         ROUND(AVG(rating)::numeric, 1) AS avg,
+         COUNT(*)::int AS count
+       FROM reviews
+       WHERE product_id = $1
+         AND status = 'published'`,
+      [productId]
+    );
+
+    const row = result.rows[0];
+    res.json({
+      ok: true,
+      avg: row?.avg ? Number(row.avg) : 0,
+      count: row?.count ? Number(row.count) : 0
+    });
+  } catch (e) {
+    console.error('review-summary error:', e);
+    res.json({ ok: false, avg: 0, count: 0 });
+  }
+});
+
 app.get('/admin/api/reviews', adminAuth, async (_req, res) => {
   try {
     const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
