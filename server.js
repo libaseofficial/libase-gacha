@@ -521,6 +521,36 @@ app.post('/admin/api/reviews/:id/status', adminAuth, async (req, res) => {
   }
 });
 
+app.get('/latest-reviews', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || '20', 10), 50);
+
+  try {
+    const result = await pool.query(
+      `SELECT 
+         product_id,
+         product_name,
+         author_name,
+         rating,
+         title,
+         body,
+         image_url,
+         reply,
+         replied_at,
+         created_at
+       FROM reviews
+       WHERE status = 'published'
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+
+    res.json({ ok: true, reviews: result.rows });
+  } catch (e) {
+    console.error('latest-reviews error:', e);
+    res.json({ ok: false, reviews: [] });
+  }
+});
+
 // Webhook
 const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
 const POINT_RATE = 1;
