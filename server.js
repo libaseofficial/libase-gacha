@@ -281,7 +281,7 @@ if (rewardResult && typeof rewardResult === 'object') {
 } else {
   rewardCodeStr = rewardResult;
 }
-
+await pool.query('UPDATE rewards SET stock = stock - 1 WHERE id = $1', [reward.id]);
 await pool.query(
   'UPDATE customer_points SET points = points - $1, updated_at = NOW() WHERE customer_id = $2 AND shop_domain = $3',
   [GACHA_COST, customerId, SHOPIFY_SHOP]
