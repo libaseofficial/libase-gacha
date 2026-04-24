@@ -187,7 +187,7 @@ app.get('/my-points', async (req, res) => {
   }
 });
 
-aapp.get('/history', async (req, res) => {
+app.get('/history', async (req, res) => {
   const { customerId } = req.query;
   if (!customerId) return res.json({ ok: false, history: [] });
   try {
