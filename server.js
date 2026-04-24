@@ -306,11 +306,6 @@ app.post('/spin-with-points', async (req, res) => {
 // 管理画面
 app.get('/admin', adminAuth, (_req, res) => res.sendFile(join(__dirname, 'public', 'admin.html')));
 
-app.get('/admin/api/rewards', adminAuth, async (_req, res) => {
-  const result = await pool.query('SELECT * FROM rewards ORDER BY id');
-  res.json(result.rows);
-});
-
 app.post('/admin/api/rewards', adminAuth, async (req, res) => {
   const { name, probability, stock, rarity, reward_type, discount_amount, image_url } = req.body;
   const result = await pool.query(
@@ -487,6 +482,14 @@ app.get('/review-summary', async (req, res) => {
     console.error('review-summary error:', e);
     res.json({ ok: false, avg: 0, count: 0 });
   }
+});
+
+// 公開用景品一覧
+app.get('/rewards', async (_req, res) => {
+  const result = await pool.query(
+    'SELECT name, rarity, reward_type, discount_amount, image_url, stock FROM rewards WHERE stock > 0 ORDER BY probability DESC'
+  );
+  res.json(result.rows);
 });
 
 app.get('/admin/api/reviews', adminAuth, async (_req, res) => {
@@ -783,6 +786,18 @@ app.get('/my-orders', async (req, res) => {
   } catch (e) {
     console.error('my-orders error:', e);
     res.json({ ok: false, products: [] });
+  }
+});
+
+// 公開用景品一覧
+app.get('/rewards', async (_req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT name, rarity, reward_type, discount_amount, image_url, stock FROM rewards WHERE stock > 0 ORDER BY probability DESC'
+    );
+    res.json(result.rows);
+  } catch (e) {
+    res.json([]);
   }
 });
 
