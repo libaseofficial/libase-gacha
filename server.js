@@ -85,7 +85,7 @@ async function issueRewardCode(reward) {
       "UPDATE external_codes SET status = 'used', used_at = NOW() WHERE id = $1",
       [externalCode.id]
     );
-    return externalCode.code;
+    return { code: externalCode.code, pin: externalCode.pin_code || null };
   }
 
   try {
@@ -270,33 +270,43 @@ app.post('/spin-with-points', async (req, res) => {
     }
 
     const reward = await draw();
-    if (!reward) return res.json({ ok: false, message: '景品がありません' });
-    const rewardCode = await issueRewardCode(reward);
+if (!reward) return res.json({ ok: false, message: '景品がありません' });
+const rewardResult = await issueRewardCode(reward);
 
-    await pool.query(
-      'UPDATE customer_points SET points = points - $1, updated_at = NOW() WHERE customer_id = $2 AND shop_domain = $3',
-      [GACHA_COST, customerId, SHOPIFY_SHOP]
-    );
+let rewardCodeStr = null;
+let rewardPin = null;
+if (rewardResult && typeof rewardResult === 'object') {
+  rewardCodeStr = rewardResult.code;
+  rewardPin = rewardResult.pin;
+} else {
+  rewardCodeStr = rewardResult;
+}
 
-    await pool.query(
-      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason) VALUES ($1, $2, $3, 'gacha', 'ガチャ消費')",
-      [customerId, SHOPIFY_SHOP, -GACHA_COST]
-    );
+await pool.query(
+  'UPDATE customer_points SET points = points - $1, updated_at = NOW() WHERE customer_id = $2 AND shop_domain = $3',
+  [GACHA_COST, customerId, SHOPIFY_SHOP]
+);
 
-    await pool.query(
-      'INSERT INTO gacha_history (customer_id, reward_name, reward_code, points_used) VALUES ($1, $2, $3, $4)',
-      [customerId, reward.name, rewardCode, GACHA_COST]
-    );
+await pool.query(
+  "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason) VALUES ($1, $2, $3, 'gacha', 'ガチャ消費')",
+  [customerId, SHOPIFY_SHOP, -GACHA_COST]
+);
 
-    console.log(`✅ ガチャ: customer=${customerId} -${GACHA_COST}pt → ${reward.name}`);
-    res.json({
-      ok: true,
-      reward: reward.name,
-      rarity: reward.rarity || 'normal',
-      rewardCode,
-      rewardType: reward.reward_type,
-      imageUrl: reward.image_url || null
-    });
+await pool.query(
+  'INSERT INTO gacha_history (customer_id, reward_name, reward_code, points_used) VALUES ($1, $2, $3, $4)',
+  [customerId, reward.name, rewardCodeStr, GACHA_COST]
+);
+
+console.log(`✅ ガチャ: customer=${customerId} -${GACHA_COST}pt → ${reward.name}`);
+res.json({
+  ok: true,
+  reward: reward.name,
+  rarity: reward.rarity || 'normal',
+  rewardCode: rewardCodeStr,
+  rewardPin: rewardPin,
+  rewardType: reward.reward_type,
+  imageUrl: reward.image_url || null
+});
   } catch (e) {
     console.error('spin-with-points error:', e);
     res.json({ ok: false, message: 'エラーが発生しました' });
@@ -370,9 +380,16 @@ app.get('/admin/api/external-codes/:rewardId', adminAuth, async (req, res) => {
 });
 
 app.post('/admin/api/external-codes', adminAuth, async (req, res) => {
-  const { reward_id, codes } = req.body;
-  const values = codes.map(code => `(${reward_id}, '${code}')`).join(',');
-  await pool.query(`INSERT INTO external_codes (reward_id, code) VALUES ${values}`);
+  const { reward_id, codes, pin_codes } = req.body;
+  for (let i = 0; i < codes.length; i++) {
+    const code = codes[i].trim();
+    const pin = pin_codes && pin_codes[i] ? pin_codes[i].trim() : null;
+    if (!code) continue;
+    await pool.query(
+      'INSERT INTO external_codes (reward_id, code, pin_code) VALUES ($1, $2, $3)',
+      [reward_id, code, pin]
+    );
+  }
   res.json({ ok: true });
 });
 
