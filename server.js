@@ -525,7 +525,7 @@ app.get('/latest-reviews', async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '20', 10), 50);
 
   try {
-    const result = await pool.query(
+    const latestResult = await pool.query(
       `SELECT 
          product_id,
          product_name,
@@ -544,10 +544,31 @@ app.get('/latest-reviews', async (req, res) => {
       [limit]
     );
 
-    res.json({ ok: true, reviews: result.rows });
+    const summaryResult = await pool.query(
+      `SELECT 
+         ROUND(AVG(rating)::numeric, 2) AS avg,
+         COUNT(*)::int AS count
+       FROM reviews
+       WHERE status = 'published'`
+    );
+
+    const summary = summaryResult.rows[0];
+
+    res.json({
+      ok: true,
+      summary: {
+        avg: summary?.avg ? Number(summary.avg) : 0,
+        count: summary?.count ? Number(summary.count) : 0
+      },
+      reviews: latestResult.rows
+    });
   } catch (e) {
     console.error('latest-reviews error:', e);
-    res.json({ ok: false, reviews: [] });
+    res.json({
+      ok: false,
+      summary: { avg: 0, count: 0 },
+      reviews: []
+    });
   }
 });
 
