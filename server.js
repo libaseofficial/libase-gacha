@@ -187,12 +187,17 @@ app.get('/my-points', async (req, res) => {
   }
 });
 
-app.get('/history', async (req, res) => {
+aapp.get('/history', async (req, res) => {
   const { customerId } = req.query;
   if (!customerId) return res.json({ ok: false, history: [] });
   try {
     const result = await pool.query(
-      'SELECT reward_name, points_used, created_at, reward_code FROM gacha_history WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 10',
+      `SELECT gh.reward_name, gh.points_used, gh.created_at, gh.reward_code,
+              r.image_url
+       FROM gacha_history gh
+       LEFT JOIN rewards r ON r.name = gh.reward_name
+       WHERE gh.customer_id = $1
+       ORDER BY gh.created_at DESC LIMIT 10`,
       [customerId]
     );
     res.json({ ok: true, history: result.rows });
