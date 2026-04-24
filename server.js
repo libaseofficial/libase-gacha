@@ -316,6 +316,11 @@ res.json({
 // 管理画面
 app.get('/admin', adminAuth, (_req, res) => res.sendFile(join(__dirname, 'public', 'admin.html')));
 
+app.get('/admin/api/rewards', adminAuth, async (_req, res) => {
+  const result = await pool.query('SELECT * FROM rewards ORDER BY id');
+  res.json(result.rows);
+});
+
 app.post('/admin/api/rewards', adminAuth, async (req, res) => {
   const { name, probability, stock, rarity, reward_type, discount_amount, image_url } = req.body;
   const result = await pool.query(
