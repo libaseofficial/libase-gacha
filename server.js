@@ -17,7 +17,7 @@ const upload = multer({ dest: 'uploads/' });
 
 app.use(cors());
 app.use((req, res, next) => {
-  if (req.path === '/webhook/orders-paid' || req.path === '/webhook/orders-cancelled' || req.path === '/webhook/customers-created') {
+  if (req.path === '/webhook/orders-paid' || req.path === '/webhook/orders-cancelled' || req.path === '/webhook/customers-created' || req.path === '/webhook/customers-deleted') {
     express.raw({ type: 'application/json' })(req, res, next);
   } else {
     express.json()(req, res, next);
@@ -484,13 +484,6 @@ app.get('/review-summary', async (req, res) => {
   }
 });
 
-// 公開用景品一覧
-app.get('/rewards', async (_req, res) => {
-  const result = await pool.query(
-    'SELECT name, rarity, reward_type, discount_amount, image_url, stock FROM rewards WHERE stock > 0 ORDER BY probability DESC'
-  );
-  res.json(result.rows);
-});
 
 app.get('/admin/api/reviews', adminAuth, async (_req, res) => {
   try {
@@ -785,6 +778,33 @@ app.post('/webhook/customers-created', async (req, res) => {
     res.status(200).send('ok');
   } catch (e) {
     console.error('Signup webhook error:', e);
+    res.status(500).send('error');
+  }
+});
+
+// 顧客削除時のポイント削除
+app.post('/webhook/customers-deleted', async (req, res) => {
+  const hmac = req.headers['x-shopify-hmac-sha256'];
+  const hash = crypto.createHmac('sha256', SHOPIFY_WEBHOOK_SECRET).update(req.body).digest('base64');
+  if (hmac !== hash) {
+    console.warn('Webhook: invalid signature');
+    return res.status(401).send('Unauthorized');
+  }
+
+  const customer = JSON.parse(req.body);
+  const customerId = customer.id?.toString();
+  if (!customerId) return res.status(200).send('no customer');
+
+  try {
+    await pool.query('DELETE FROM customer_points WHERE customer_id = $1 AND shop_domain = $2', [customerId, SHOPIFY_SHOP]);
+    await pool.query('DELETE FROM point_logs WHERE customer_id = $1 AND shop_domain = $2', [customerId, SHOPIFY_SHOP]);
+    await pool.query('DELETE FROM gacha_history WHERE customer_id = $1', [customerId]);
+    await pool.query('DELETE FROM reviews WHERE customer_id = $1 AND shop_domain = $2', [customerId, SHOPIFY_SHOP]);
+
+    console.log(`✅ 顧客削除: customer=${customerId}`);
+    res.status(200).send('ok');
+  } catch (e) {
+    console.error('Customer delete webhook error:', e);
     res.status(500).send('error');
   }
 });
