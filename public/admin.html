@@ -304,9 +304,13 @@
   <div class="modal-content">
     <h3 id="code-modal-title">外部コード管理</h3>
     <input type="hidden" id="code-reward-id">
+    <div class="form-group" style="margin-bottom:12px;">
+      <label>カード番号（1行1コード）</label>
+      <textarea id="add-codes" placeholder="1234567890123456&#10;9876543210987654"></textarea>
+    </div>
     <div class="form-group" style="margin-bottom:16px;">
-      <label>コードを追加（1行1コード）</label>
-      <textarea id="add-codes" placeholder="STARBUCKS-ABC123&#10;STARBUCKS-DEF456"></textarea>
+      <label>PINコード（任意・1行1コード）</label>
+      <textarea id="add-pins" placeholder="1234&#10;5678" style="height:60px;"></textarea>
     </div>
     <div class="form-actions" style="margin-bottom:16px;">
       <button class="btn btn-primary" onclick="addExternalCodes()">追加する</button>
@@ -493,27 +497,33 @@ async function loadExternalCodes(rewardId) {
     return;
   }
   list.innerHTML = codes.map(c => `
-    <div class="code-item">
+  <div class="code-item">
+    <div>
       <span class="${c.status === 'used' ? 'code-used' : ''}">${c.code}</span>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <span class="${c.status === 'used' ? 'badge-used' : 'badge-available'}">${c.status === 'used' ? '使用済み' : '未使用'}</span>
-        ${c.status !== 'used' ? `<button class="btn btn-danger" style="padding:3px 8px;font-size:12px;" onclick="deleteExternalCode(${c.id})">削除</button>` : ''}
-      </div>
+      ${c.pin_code ? `<span style="font-size:11px;color:#888;margin-left:8px;">PIN: ${c.pin_code}</span>` : ''}
     </div>
-  `).join('');
+    <div style="display:flex;gap:6px;align-items:center;">
+      <span class="${c.status === 'used' ? 'badge-used' : 'badge-available'}">${c.status === 'used' ? '使用済み' : '未使用'}</span>
+      ${c.status !== 'used' ? `<button class="btn btn-danger" style="padding:3px 8px;font-size:12px;" onclick="deleteExternalCode(${c.id})">削除</button>` : ''}
+    </div>
+  </div>
+`).join('');
 }
 
 async function addExternalCodes() {
   const rewardId = document.getElementById('code-reward-id').value;
   const text = document.getElementById('add-codes').value.trim();
+  const pinText = document.getElementById('add-pins').value.trim();
   if (!text) return;
   const codes = text.split('\n').map(c => c.trim()).filter(c => c);
+  const pins = pinText ? pinText.split('\n').map(c => c.trim()) : [];
   await fetch('/admin/api/external-codes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reward_id: rewardId, codes })
+    body: JSON.stringify({ reward_id: rewardId, codes, pin_codes: pins })
   });
   document.getElementById('add-codes').value = '';
+  document.getElementById('add-pins').value = '';
   await loadExternalCodes(rewardId);
 }
 
