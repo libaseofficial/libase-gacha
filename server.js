@@ -17,7 +17,7 @@ const upload = multer({ dest: 'uploads/' });
 
 app.use(cors());
 app.use((req, res, next) => {
-  if (req.path === '/webhook/orders-paid' || req.path === '/webhook/orders-cancelled') {
+  if (req.path === '/webhook/orders-paid' || req.path === '/webhook/orders-cancelled' || req.path === '/webhook/customers-created') {
     express.raw({ type: 'application/json' })(req, res, next);
   } else {
     express.json()(req, res, next);
@@ -747,6 +747,48 @@ app.post('/webhook/orders-cancelled', async (req, res) => {
   }
 });
 
+// 新規会員登録ポイント付与
+app.post('/webhook/customers-created', async (req, res) => {
+  const hmac = req.headers['x-shopify-hmac-sha256'];
+  const hash = crypto.createHmac('sha256', SHOPIFY_WEBHOOK_SECRET).update(req.body).digest('base64');
+  if (hmac !== hash) {
+    console.warn('Webhook: invalid signature');
+    return res.status(401).send('Unauthorized');
+  }
+
+  const customer = JSON.parse(req.body);
+  const customerId = customer.id?.toString();
+  const email = customer.email || '';
+  if (!customerId) return res.status(200).send('no customer');
+
+  const SIGNUP_POINTS = 100;
+
+  try {
+    const dup = await pool.query(
+      "SELECT id FROM point_logs WHERE customer_id = $1 AND type = 'signup'",
+      [customerId]
+    );
+    if (dup.rows.length > 0) return res.status(200).send('already processed');
+
+    await pool.query(
+      `INSERT INTO customer_points (customer_id, shop_domain, email, points, total_earned) VALUES ($1, $2, $3, $4, $4)
+       ON CONFLICT (customer_id, shop_domain) DO UPDATE SET points = customer_points.points + $4, total_earned = customer_points.total_earned + $4, email = EXCLUDED.email, updated_at = NOW()`,
+      [customerId, SHOPIFY_SHOP, email, SIGNUP_POINTS]
+    );
+
+    await pool.query(
+      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason) VALUES ($1, $2, $3, 'signup', '新規会員登録ポイント')",
+      [customerId, SHOPIFY_SHOP, SIGNUP_POINTS]
+    );
+
+    console.log(`✅ 新規登録ポイント付与: customer=${customerId} +${SIGNUP_POINTS}pt`);
+    res.status(200).send('ok');
+  } catch (e) {
+    console.error('Signup webhook error:', e);
+    res.status(500).send('error');
+  }
+});
+
 // ガチャ回数取得
 app.get('/gacha-count', async (req, res) => {
   const { customerId } = req.query;
@@ -800,6 +842,8 @@ app.get('/rewards', async (_req, res) => {
     res.json([]);
   }
 });
+
+
 
 app.listen(PORT, () => {
   console.log(`Gacha running on port ${PORT}`);
