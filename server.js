@@ -858,11 +858,15 @@ app.get('/my-orders', async (req, res) => {
     const result = await pool.query(
       `SELECT cp.product_id, cp.product_name, cp.image_url
        FROM customer_products cp
+       JOIN customer_points cpt ON cpt.customer_id = cp.customer_id AND cpt.shop_domain = cp.shop_domain
        WHERE cp.customer_id = $1 AND cp.shop_domain = $2
        AND NOT EXISTS (
          SELECT 1 FROM reviews r
-         WHERE r.customer_id = cp.customer_id
-         AND r.product_id = cp.product_id
+         WHERE r.product_id = cp.product_id
+         AND (
+           r.customer_id = cp.customer_id
+           OR r.email = cpt.email
+         )
        )`,
       [customerId, SHOPIFY_SHOP]
     );
