@@ -635,22 +635,38 @@ app.post('/webhook/orders-paid', async (req, res) => {
     );
 
     console.log(`✅ ポイント付与: customer=${customerId} +${pointsToAdd}pt (注文#${order.order_number})`);
-    // ↓ここに追加
-for (const item of order.line_items || []) {
-  if (!item.product_id) continue;
-  await pool.query(
-`INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name, image_url)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
-[customerId, SHOPIFY_SHOP,item.product_handle, item.title, item.image?.src || null]
-  );
-}
+    for (const item of order.line_items || []) {
+      if (!item.product_id) continue;
+    
+      let productHandle = null;
+      try {
+        const productRes = await fetch(
+          `https://${SHOPIFY_SHOP}/admin/api/2025-01/products/${item.product_id}.json`,
+          { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
+        );
+        const productData = await productRes.json();
+        productHandle = productData.product?.handle || null;
+      } catch (e) {
+        console.error('product handle fetch error:', e);
+      }
+    
+      if (!productHandle) continue;
+    
+      await pool.query(
+        `INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name, image_url)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
+        [customerId, SHOPIFY_SHOP, productHandle, item.title, item.image?.src || null]
+      );
+    }
+
     res.status(200).send('ok');
   } catch (e) {
     console.error('Webhook error:', e);
     res.status(500).send('error');
   }
 });
+
 
 // Supabase ping
 setInterval(async () => {
