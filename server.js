@@ -724,14 +724,18 @@ app.post('/webhook/orders-paid', async (req, res) => {
         console.error('product handle fetch error:', e);
       }
     
-      if (!productHandle) continue;
+      if (!productHandle || productHandle.trim() === '') continue;
     
-      await pool.query(
-        `INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name, image_url)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
-        [customerId, SHOPIFY_SHOP, productHandle, item.title, item.image?.src || null]
-      );
+      try {
+        await pool.query(
+          `INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name, image_url)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
+          [customerId, SHOPIFY_SHOP, productHandle, item.title, item.image?.src || null]
+        );
+      } catch (e) {
+        console.error('customer_products insert error:', e);
+      }
     }
 
     res.status(200).send('ok');
@@ -740,7 +744,6 @@ app.post('/webhook/orders-paid', async (req, res) => {
     res.status(500).send('error');
   }
 });
-
 
 // Supabase ping
 setInterval(async () => {
