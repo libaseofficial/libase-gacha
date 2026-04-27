@@ -132,7 +132,7 @@ async function issueRewardCode(reward) {
 app.get('/', (_req, res) => res.send('LIBASE Gacha Server is running'));
 
 app.get('/install', (_req, res) => {
-  const url = `https://${SHOPIFY_SHOP}/admin/oauth/authorize?client_id=${CLIENT_ID}&scope=read_price_rules,write_price_rules,read_discounts,write_discounts,read_customers,read_orders&redirect_uri=https://libase-gacha.onrender.com/callback&state=gacha123`;
+  const url = `https://${SHOPIFY_SHOP}/admin/oauth/authorize?client_id=${CLIENT_ID}&scope=read_price_rules,write_price_rules,read_discounts,write_discounts,read_customers,read_orders,write_files&redirect_uri=https://libase-gacha.onrender.com/callback&state=gacha123`;
   res.redirect(url);
 });
 
@@ -408,13 +408,87 @@ app.delete('/admin/api/external-codes/:id', adminAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/upload', upload.single('file'), (req, res) => {
-  if (!req.file) {
-    return res.json({ ok: false, message: 'ファイルがありません' });
-  }
+app.post('/upload', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.json({ ok: false, message: 'ファイルがありません' });
 
-  const fileUrl = `https://libase-gacha.onrender.com/uploads/${req.file.filename}`;
-  res.json({ ok: true, url: fileUrl });
+  try {
+    const fs = await import('fs');
+    const fileData = fs.readFileSync(req.file.path);
+    const base64 = fileData.toString('base64');
+    const mimeType = req.file.mimetype;
+
+    const stagingRes = await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/2025-01/graphql.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': ACCESS_TOKEN,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+            stagedUploadsCreate(input: $input) {
+              stagedTargets {
+                url
+                resourceUrl
+                parameters { name value }
+              }
+            }
+          }`,
+          variables: {
+            input: [{
+              filename: req.file.originalname,
+              mimeType,
+              resource: 'FILE',
+              fileSize: String(req.file.size)
+            }]
+          }
+        })
+      }
+    );
+
+    const stagingData = await stagingRes.json();
+    const target = stagingData.data?.stagedUploadsCreate?.stagedTargets?.[0];
+    if (!target) throw new Error('Staging failed');
+
+    const formData = new FormData();
+    target.parameters.forEach(p => formData.append(p.name, p.value));
+    formData.append('file', new Blob([fileData], { type: mimeType }), req.file.originalname);
+
+    await fetch(target.url, { method: 'POST', body: formData });
+
+    const fileCreateRes = await fetch(
+      `https://${SHOPIFY_SHOP}/admin/api/2025-01/graphql.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': ACCESS_TOKEN,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `mutation fileCreate($files: [FileCreateInput!]!) {
+            fileCreate(files: $files) {
+              files { ... on MediaImage { image { url } } }
+            }
+          }`,
+          variables: {
+            files: [{ originalSource: target.resourceUrl, contentType: 'IMAGE' }]
+          }
+        })
+      }
+    );
+
+    const fileData2 = await fileCreateRes.json();
+    const url = fileData2.data?.fileCreate?.files?.[0]?.image?.url;
+
+    fs.unlinkSync(req.file.path);
+
+    if (!url) throw new Error('File create failed');
+    res.json({ ok: true, url });
+  } catch (e) {
+    console.error('Upload error:', e);
+    res.json({ ok: false, message: 'アップロードに失敗しました' });
+  }
 });
 
 // レビューAPI
