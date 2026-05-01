@@ -595,6 +595,46 @@ app.get('/admin/api/reviews', adminAuth, async (_req, res) => {
   }
 });
 
+app.post('/admin/api/reviews', adminAuth, async (req, res) => {
+  const { productId, productName, authorName, email, rating, title, body, imageUrl, status } = req.body;
+  const normalizedRating = parseInt(rating, 10);
+  const normalizedStatus = status === 'hidden' ? 'hidden' : 'published';
+
+  if (!productId || !productName || !body) {
+    return res.json({ ok: false, message: '必須項目が不足しています' });
+  }
+  if (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5) {
+    return res.json({ ok: false, message: '評価は1〜5で入力してください' });
+  }
+
+  try {
+    const customerId = `admin_manual_${Date.now()}`;
+    const result = await pool.query(
+      `INSERT INTO reviews
+       (customer_id, shop_domain, product_id, product_name, author_name, email, rating, title, body, image_url, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id`,
+      [
+        customerId,
+        SHOPIFY_SHOP,
+        productId,
+        productName,
+        authorName || '匿名',
+        email || null,
+        normalizedRating,
+        title || null,
+        body,
+        imageUrl || null,
+        normalizedStatus
+      ]
+    );
+    res.json({ ok: true, id: result.rows[0].id });
+  } catch (e) {
+    console.error('Admin review create error:', e);
+    res.json({ ok: false, message: 'レビューの追加に失敗しました' });
+  }
+});
+
 app.post('/admin/api/reviews/:id/reply', adminAuth, async (req, res) => {
   const { reply } = req.body;
   try {

@@ -163,6 +163,60 @@
   <!-- レビュー管理 -->
   <div id="section-reviews" class="section">
     <div class="card">
+      <h2>レビューを追加</h2>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>投稿者名</label>
+          <input type="text" id="review-author" placeholder="例：山田 花子">
+        </div>
+        <div class="form-group">
+          <label>メールアドレス（任意）</label>
+          <input type="email" id="review-email" placeholder="example@example.com">
+        </div>
+        <div class="form-group">
+          <label>商品ID</label>
+          <input type="text" id="review-product-id" placeholder="Shopifyの商品ID">
+        </div>
+        <div class="form-group">
+          <label>商品名</label>
+          <input type="text" id="review-product-name" placeholder="例：LIBASE Gacha">
+        </div>
+        <div class="form-group">
+          <label>評価</label>
+          <select id="review-rating">
+            <option value="5">★★★★★（5）</option>
+            <option value="4">★★★★☆（4）</option>
+            <option value="3">★★★☆☆（3）</option>
+            <option value="2">★★☆☆☆（2）</option>
+            <option value="1">★☆☆☆☆（1）</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>状態</label>
+          <select id="review-status">
+            <option value="published">公開</option>
+            <option value="hidden">非公開</option>
+          </select>
+        </div>
+        <div class="form-group" style="grid-column: span 2;">
+          <label>タイトル（任意）</label>
+          <input type="text" id="review-title" placeholder="例：とても満足です">
+        </div>
+        <div class="form-group" style="grid-column: span 2;">
+          <label>本文</label>
+          <textarea id="review-body" placeholder="レビュー本文を入力してください"></textarea>
+        </div>
+        <div class="form-group" style="grid-column: span 2;">
+          <label>画像URL（任意）</label>
+          <input type="text" id="review-image-url" placeholder="https://...">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="addReview()">追加する</button>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>レビュー一覧</h2>
       <div style="overflow-x:auto;">
         <table style="min-width:900px;">
@@ -379,6 +433,18 @@ function formatDate(str) {
 
 function starsHtml(rating) {
   return '★'.repeat(rating) + '☆'.repeat(5 - rating);
+}
+
+function clearReviewForm() {
+  document.getElementById('review-author').value = '';
+  document.getElementById('review-email').value = '';
+  document.getElementById('review-product-id').value = '';
+  document.getElementById('review-product-name').value = '';
+  document.getElementById('review-rating').value = '5';
+  document.getElementById('review-status').value = 'published';
+  document.getElementById('review-title').value = '';
+  document.getElementById('review-body').value = '';
+  document.getElementById('review-image-url').value = '';
 }
 
 // ===== 景品管理 =====
@@ -603,6 +669,42 @@ async function submitPointChange() {
 }
 
 // ===== レビュー管理 =====
+async function addReview() {
+  const body = {
+    authorName: document.getElementById('review-author').value.trim(),
+    email: document.getElementById('review-email').value.trim() || null,
+    productId: document.getElementById('review-product-id').value.trim(),
+    productName: document.getElementById('review-product-name').value.trim(),
+    rating: parseInt(document.getElementById('review-rating').value, 10),
+    status: document.getElementById('review-status').value,
+    title: document.getElementById('review-title').value.trim() || null,
+    body: document.getElementById('review-body').value.trim(),
+    imageUrl: document.getElementById('review-image-url').value.trim() || null
+  };
+
+  if (!body.productId) return alert('商品IDを入力してください');
+  if (!body.productName) return alert('商品名を入力してください');
+  if (!body.body) return alert('本文を入力してください');
+
+  const res = await fetch('/admin/api/reviews', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': AUTH
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+
+  if (data.ok) {
+    clearReviewForm();
+    loadReviews();
+    alert('✅ レビューを追加しました');
+  } else {
+    alert(data.message || 'レビューの追加に失敗しました');
+  }
+}
+
 async function loadReviews() {
   const res = await fetch('/admin/api/reviews');
   const reviews = await res.json();
