@@ -635,6 +635,67 @@ app.post('/admin/api/reviews', adminAuth, async (req, res) => {
   }
 });
 
+
+app.put('/admin/api/reviews/:id', adminAuth, async (req, res) => {
+  const { productId, productName, authorName, email, rating, title, body, imageUrl, status } = req.body;
+  const normalizedRating = parseInt(rating, 10);
+  const normalizedStatus = status === 'hidden' ? 'hidden' : 'published';
+
+  if (!productId || !productName || !body) {
+    return res.json({ ok: false, message: '必須項目が不足しています' });
+  }
+  if (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5) {
+    return res.json({ ok: false, message: '評価は1〜5で入力してください' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE reviews
+       SET product_id = $1,
+           product_name = $2,
+           author_name = $3,
+           email = $4,
+           rating = $5,
+           title = $6,
+           body = $7,
+           image_url = $8,
+           status = $9,
+           updated_at = NOW()
+       WHERE id = $10
+       RETURNING id`,
+      [
+        productId,
+        productName,
+        authorName || '匿名',
+        email || null,
+        normalizedRating,
+        title || null,
+        body,
+        imageUrl || null,
+        normalizedStatus,
+        req.params.id
+      ]
+    );
+
+    if (result.rows.length === 0) return res.json({ ok: false, message: 'レビューが見つかりません' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Admin review update error:', e);
+    res.json({ ok: false, message: 'レビューの保存に失敗しました' });
+  }
+});
+
+app.delete('/admin/api/reviews/:id', adminAuth, async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM reviews WHERE id = $1 RETURNING id', [req.params.id]);
+    if (result.rows.length === 0) return res.json({ ok: false, message: 'レビューが見つかりません' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Admin review delete error:', e);
+    res.json({ ok: false });
+  }
+});
+
 app.post('/admin/api/reviews/:id/reply', adminAuth, async (req, res) => {
   const { reply } = req.body;
   try {

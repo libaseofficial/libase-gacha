@@ -174,8 +174,8 @@
           <input type="email" id="review-email" placeholder="example@example.com">
         </div>
         <div class="form-group">
-          <label>商品ID</label>
-          <input type="text" id="review-product-id" placeholder="Shopifyの商品ID">
+          <label>商品ハンドル</label>
+          <input type="text" id="review-product-id" placeholder="例：gift-the-moment">
         </div>
         <div class="form-group">
           <label>商品名</label>
@@ -229,7 +229,7 @@
               <th style="min-width:180px;">内容</th>
               <th style="min-width:80px;">返信</th>
               <th style="min-width:60px;">状態</th>
-              <th style="min-width:160px;">操作</th>
+              <th style="min-width:220px;">操作</th>
             </tr>
           </thead>
           <tbody id="reviews-table"></tbody>
@@ -373,6 +373,66 @@
     <div id="external-codes-list"></div>
     <div class="form-actions" style="margin-top:16px;">
       <button class="btn btn-edit" onclick="closeModal('code-modal')">閉じる</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- レビュー編集モーダル -->
+<div class="modal" id="review-edit-modal">
+  <div class="modal-content">
+    <h3>レビューを編集</h3>
+    <input type="hidden" id="edit-review-id">
+    <div class="form-grid">
+      <div class="form-group">
+        <label>投稿者名</label>
+        <input type="text" id="edit-review-author">
+      </div>
+      <div class="form-group">
+        <label>メールアドレス（任意）</label>
+        <input type="email" id="edit-review-email">
+      </div>
+      <div class="form-group">
+        <label>商品ハンドル</label>
+        <input type="text" id="edit-review-product-id" placeholder="例：gift-the-moment">
+      </div>
+      <div class="form-group">
+        <label>商品名</label>
+        <input type="text" id="edit-review-product-name">
+      </div>
+      <div class="form-group">
+        <label>評価</label>
+        <select id="edit-review-rating">
+          <option value="5">★★★★★（5）</option>
+          <option value="4">★★★★☆（4）</option>
+          <option value="3">★★★☆☆（3）</option>
+          <option value="2">★★☆☆☆（2）</option>
+          <option value="1">★☆☆☆☆（1）</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>状態</label>
+        <select id="edit-review-status">
+          <option value="published">公開</option>
+          <option value="hidden">非公開</option>
+        </select>
+      </div>
+      <div class="form-group" style="grid-column: span 2;">
+        <label>タイトル（任意）</label>
+        <input type="text" id="edit-review-title">
+      </div>
+      <div class="form-group" style="grid-column: span 2;">
+        <label>本文</label>
+        <textarea id="edit-review-body"></textarea>
+      </div>
+      <div class="form-group" style="grid-column: span 2;">
+        <label>画像URL（任意）</label>
+        <input type="text" id="edit-review-image-url" placeholder="https://...">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveReviewEdit()">保存</button>
+      <button class="btn btn-edit" onclick="closeModal('review-edit-modal')">キャンセル</button>
     </div>
   </div>
 </div>
@@ -669,6 +729,8 @@ async function submitPointChange() {
 }
 
 // ===== レビュー管理 =====
+let allReviewsData = [];
+
 async function addReview() {
   const body = {
     authorName: document.getElementById('review-author').value.trim(),
@@ -682,7 +744,7 @@ async function addReview() {
     imageUrl: document.getElementById('review-image-url').value.trim() || null
   };
 
-  if (!body.productId) return alert('商品IDを入力してください');
+  if (!body.productId) return alert('商品ハンドルを入力してください');
   if (!body.productName) return alert('商品名を入力してください');
   if (!body.body) return alert('本文を入力してください');
 
@@ -708,6 +770,7 @@ async function addReview() {
 async function loadReviews() {
   const res = await fetch('/admin/api/reviews');
   const reviews = await res.json();
+  allReviewsData = reviews;
   const tbody = document.getElementById('reviews-table');
   if (reviews.length === 0) {
     tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#aaa;padding:24px;">レビューはまだありません</td></tr>';
@@ -737,14 +800,86 @@ async function loadReviews() {
         <span class="badge-${r.status}">${r.status === 'published' ? '公開中' : '非公開'}</span>
       </td>
       <td style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn btn-edit" onclick="openReviewEdit(${r.id})">編集</button>
         <button class="btn btn-reply" onclick="openReply(${r.id}, '${(r.author_name||'').replace(/'/g,"\\'")}', ${r.rating}, '${(r.body||'').replace(/'/g,"\\'").replace(/\n/g,' ')}', '${(r.reply||'').replace(/'/g,"\\'")}')">返信</button>
         ${r.status === 'published'
           ? `<button class="btn btn-hide" onclick="toggleStatus(${r.id}, 'hidden')">非公開</button>`
           : `<button class="btn btn-show" onclick="toggleStatus(${r.id}, 'published')">公開</button>`
         }
+        <button class="btn btn-danger" onclick="deleteReview(${r.id})">削除</button>
       </td>
     </tr>
   `).join('');
+}
+
+
+function openReviewEdit(id) {
+  const r = allReviewsData.find(x => x.id === id);
+  if (!r) return alert('レビューが見つかりません');
+  document.getElementById('edit-review-id').value = r.id;
+  document.getElementById('edit-review-author').value = r.author_name || '';
+  document.getElementById('edit-review-email').value = r.email || '';
+  document.getElementById('edit-review-product-id').value = r.product_id || '';
+  document.getElementById('edit-review-product-name').value = r.product_name || '';
+  document.getElementById('edit-review-rating').value = String(r.rating || 5);
+  document.getElementById('edit-review-status').value = r.status || 'published';
+  document.getElementById('edit-review-title').value = r.title || '';
+  document.getElementById('edit-review-body').value = r.body || '';
+  document.getElementById('edit-review-image-url').value = r.image_url || '';
+  document.getElementById('review-edit-modal').classList.add('open');
+}
+
+async function saveReviewEdit() {
+  const id = document.getElementById('edit-review-id').value;
+  const body = {
+    authorName: document.getElementById('edit-review-author').value.trim(),
+    email: document.getElementById('edit-review-email').value.trim() || null,
+    productId: document.getElementById('edit-review-product-id').value.trim(),
+    productName: document.getElementById('edit-review-product-name').value.trim(),
+    rating: parseInt(document.getElementById('edit-review-rating').value, 10),
+    status: document.getElementById('edit-review-status').value,
+    title: document.getElementById('edit-review-title').value.trim() || null,
+    body: document.getElementById('edit-review-body').value.trim(),
+    imageUrl: document.getElementById('edit-review-image-url').value.trim() || null
+  };
+
+  if (!body.productId) return alert('商品ハンドルを入力してください');
+  if (!body.productName) return alert('商品名を入力してください');
+  if (!body.body) return alert('本文を入力してください');
+
+  const res = await fetch('/admin/api/reviews/' + id, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': AUTH
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+
+  if (data.ok) {
+    closeModal('review-edit-modal');
+    loadReviews();
+    alert('✅ レビューを保存しました');
+  } else {
+    alert(data.message || 'レビューの保存に失敗しました');
+  }
+}
+
+async function deleteReview(id) {
+  if (!confirm('このレビューを削除しますか？')) return;
+  const res = await fetch('/admin/api/reviews/' + id, {
+    method: 'DELETE',
+    headers: { 'Authorization': AUTH }
+  });
+  const data = await res.json();
+
+  if (data.ok) {
+    loadReviews();
+    alert('✅ レビューを削除しました');
+  } else {
+    alert('レビューの削除に失敗しました');
+  }
 }
 
 function openReply(id, authorName, rating, body, existingReply) {
