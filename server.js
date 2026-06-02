@@ -409,13 +409,29 @@ app.delete('/admin/api/external-codes/:id', adminAuth, async (req, res) => {
 });
 
 app.post('/upload', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.json({ ok: false, message: 'ファイルがありません' });
+  console.log('📷 /upload called');
+
+  if (!req.file) {
+    console.warn('⚠️ upload: ファイルなし');
+    return res.json({ ok: false, message: 'ファイルがありません' });
+  }
+
+  if (!ACCESS_TOKEN) {
+    console.error('❌ upload: ACCESS_TOKEN がありません');
+    return res.json({ ok: false, message: 'Shopify連携トークンがありません' });
+  }
 
   try {
     const fs = await import('fs');
     const fileData = fs.readFileSync(req.file.path);
-    const base64 = fileData.toString('base64');
-    const mimeType = req.file.mimetype;
+    const mimeType = req.file.mimetype || 'image/jpeg';
+    const filename = req.file.originalname || `review-${Date.now()}.jpg`;
+
+    console.log('📷 upload file:', {
+      filename,
+      mimeType,
+      size: req.file.size
+    });
 
     const stagingRes = await fetch(
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/graphql.json`,
@@ -426,36 +442,72 @@ app.post('/upload', upload.single('file'), async (req, res) => {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          query: `mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
-            stagedUploadsCreate(input: $input) {
-              stagedTargets {
-                url
-                resourceUrl
-                parameters { name value }
+          query: `
+            mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+              stagedUploadsCreate(input: $input) {
+                stagedTargets {
+                  url
+                  resourceUrl
+                  parameters {
+                    name
+                    value
+                  }
+                }
+                userErrors {
+                  field
+                  message
+                }
               }
             }
-          }`,
+          `,
           variables: {
-            input: [{
-              filename: req.file.originalname,
-              mimeType,
-              resource: 'FILE',
-              fileSize: String(req.file.size)
-            }]
+            input: [
+              {
+                filename,
+                mimeType,
+                resource: 'FILE',
+                fileSize: String(req.file.size),
+                httpMethod: 'POST'
+              }
+            ]
           }
         })
       }
     );
 
     const stagingData = await stagingRes.json();
+    console.log('📷 staging status:', stagingRes.status);
+    console.log('📷 staging response:', JSON.stringify(stagingData, null, 2));
+
+    const stagingErrors = stagingData.data?.stagedUploadsCreate?.userErrors || [];
+    if (!stagingRes.ok || stagingErrors.length > 0) {
+      throw new Error(`stagedUploadsCreate failed: ${JSON.stringify(stagingErrors || stagingData)}`);
+    }
+
     const target = stagingData.data?.stagedUploadsCreate?.stagedTargets?.[0];
-    if (!target) throw new Error('Staging failed');
+    if (!target) {
+      throw new Error('stagedUploadsCreate target が取得できません');
+    }
 
     const formData = new FormData();
-    target.parameters.forEach(p => formData.append(p.name, p.value));
-    formData.append('file', new Blob([fileData], { type: mimeType }), req.file.originalname);
+    target.parameters.forEach((p) => {
+      formData.append(p.name, p.value);
+    });
 
-    await fetch(target.url, { method: 'POST', body: formData });
+    formData.append('file', new Blob([fileData], { type: mimeType }), filename);
+
+    const uploadToStorageRes = await fetch(target.url, {
+      method: 'POST',
+      body: formData
+    });
+
+    const uploadToStorageText = await uploadToStorageRes.text();
+    console.log('📷 storage upload status:', uploadToStorageRes.status);
+    console.log('📷 storage upload response:', uploadToStorageText.slice(0, 500));
+
+    if (!uploadToStorageRes.ok) {
+      throw new Error(`storage upload failed: ${uploadToStorageRes.status} ${uploadToStorageText}`);
+    }
 
     const fileCreateRes = await fetch(
       `https://${SHOPIFY_SHOP}/admin/api/2025-01/graphql.json`,
@@ -466,28 +518,74 @@ app.post('/upload', upload.single('file'), async (req, res) => {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          query: `mutation fileCreate($files: [FileCreateInput!]!) {
-            fileCreate(files: $files) {
-              files { ... on MediaImage { image { url } } }
+          query: `
+            mutation fileCreate($files: [FileCreateInput!]!) {
+              fileCreate(files: $files) {
+                files {
+                  id
+                  fileStatus
+                  alt
+                  createdAt
+                  ... on MediaImage {
+                    image {
+                      url
+                    }
+                  }
+                }
+                userErrors {
+                  field
+                  message
+                }
+              }
             }
-          }`,
+          `,
           variables: {
-            files: [{ originalSource: target.resourceUrl, contentType: 'IMAGE' }]
+            files: [
+              {
+                originalSource: target.resourceUrl,
+                contentType: 'IMAGE',
+                alt: filename
+              }
+            ]
           }
         })
       }
     );
 
-    const fileData2 = await fileCreateRes.json();
-    const url = fileData2.data?.fileCreate?.files?.[0]?.image?.url;
+    const fileCreateData = await fileCreateRes.json();
+    console.log('📷 fileCreate status:', fileCreateRes.status);
+    console.log('📷 fileCreate response:', JSON.stringify(fileCreateData, null, 2));
+
+    const fileCreateErrors = fileCreateData.data?.fileCreate?.userErrors || [];
+    if (!fileCreateRes.ok || fileCreateErrors.length > 0) {
+      throw new Error(`fileCreate failed: ${JSON.stringify(fileCreateErrors || fileCreateData)}`);
+    }
+
+    const file = fileCreateData.data?.fileCreate?.files?.[0];
+    const url = file?.image?.url || target.resourceUrl;
 
     fs.unlinkSync(req.file.path);
 
-    if (!url) throw new Error('File create failed');
+    if (!url) {
+      throw new Error('画像URLが取得できません');
+    }
+
+    console.log('✅ upload success:', url);
     res.json({ ok: true, url });
   } catch (e) {
-    console.error('Upload error:', e);
-    res.json({ ok: false, message: 'アップロードに失敗しました' });
+    console.error('❌ Upload error:', e);
+    try {
+      const fs = await import('fs');
+      if (req.file?.path && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+    } catch (_) {}
+
+    res.json({
+      ok: false,
+      message: 'アップロードに失敗しました',
+      error: e.message
+    });
   }
 });
 
