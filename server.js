@@ -696,6 +696,66 @@ app.delete('/admin/api/reviews/:id', adminAuth, async (req, res) => {
   }
 });
 
+app.post('/admin/api/reviews/:id/edit', adminAuth, async (req, res) => {
+  const { productId, productName, authorName, email, rating, title, body, imageUrl, status } = req.body;
+  const normalizedRating = parseInt(rating, 10);
+  const normalizedStatus = status === 'hidden' ? 'hidden' : 'published';
+
+  if (!productId || !productName || !body) {
+    return res.json({ ok: false, message: '必須項目が不足しています' });
+  }
+  if (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5) {
+    return res.json({ ok: false, message: '評価は1〜5で入力してください' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE reviews
+       SET product_id = $1,
+           product_name = $2,
+           author_name = $3,
+           email = $4,
+           rating = $5,
+           title = $6,
+           body = $7,
+           image_url = $8,
+           status = $9,
+           updated_at = NOW()
+       WHERE id = $10
+       RETURNING id`,
+      [
+        productId,
+        productName,
+        authorName || '匿名',
+        email || null,
+        normalizedRating,
+        title || null,
+        body,
+        imageUrl || null,
+        normalizedStatus,
+        req.params.id
+      ]
+    );
+
+    if (result.rows.length === 0) return res.json({ ok: false, message: 'レビューが見つかりません' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Admin review update error:', e);
+    res.json({ ok: false, message: 'レビューの保存に失敗しました' });
+  }
+});
+
+app.post('/admin/api/reviews/:id/delete', adminAuth, async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM reviews WHERE id = $1 RETURNING id', [req.params.id]);
+    if (result.rows.length === 0) return res.json({ ok: false, message: 'レビューが見つかりません' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Admin review delete error:', e);
+    res.json({ ok: false });
+  }
+});
+
 app.post('/admin/api/reviews/:id/reply', adminAuth, async (req, res) => {
   const { reply } = req.body;
   try {
@@ -825,7 +885,14 @@ app.post('/webhook/orders-paid', async (req, res) => {
         console.error('product handle fetch error:', e);
       }
     
-      if (!productHandle || productHandle.trim() === '') continue;
+      if (!productHandle || productHandle.trim() === '') {
+        productHandle = item.product_id?.toString() || item.sku || item.title;
+        console.warn('⚠️ productHandle取得失敗。代替IDで保存:', {
+          product_id: item.product_id,
+          title: item.title,
+          fallback: productHandle
+        });
+      }
     
       try {
         await pool.query(
@@ -834,6 +901,11 @@ app.post('/webhook/orders-paid', async (req, res) => {
            ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
           [customerId, SHOPIFY_SHOP, productHandle, item.title, item.image?.src || null]
         );
+        console.log('✅ 購入商品保存:', {
+          customerId,
+          productId: productHandle,
+          productName: item.title
+        });
       } catch (e) {
         console.error('customer_products insert error:', e);
       }
