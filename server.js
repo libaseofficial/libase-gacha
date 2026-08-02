@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import crypto from 'crypto';
 import multer from 'multer';
+import fs from 'fs';
 
 const { Pool } = pkg;
 const __filename = fileURLToPath(import.meta.url);
@@ -35,6 +36,120 @@ const SHOPIFY_SHOP = 's62nix-7r.myshopify.com';
 const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 let ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN || '';
+
+// Shopify Files API only. Keep this on a currently supported stable version.
+const SHOPIFY_FILES_API_VERSION = process.env.SHOPIFY_FILES_API_VERSION || '2026-07';
+const SHOPIFY_FILES_GRAPHQL_URL = `https://${SHOPIFY_SHOP}/admin/api/${SHOPIFY_FILES_API_VERSION}/graphql.json`;
+const TEMPORARY_SHOPIFY_UPLOAD_HOST = 'shopify-staged-uploads.storage.googleapis.com';
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isTemporaryShopifyUploadUrl(value) {
+  if (!value) return false;
+  try {
+    const parsed = new URL(String(value));
+    return parsed.hostname === TEMPORARY_SHOPIFY_UPLOAD_HOST && parsed.pathname.startsWith('/tmp/');
+  } catch (_) {
+    return false;
+  }
+}
+
+function normalizePermanentImageUrl(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
+
+  let parsed;
+  try {
+    parsed = new URL(String(value).trim());
+  } catch (_) {
+    throw new Error('画像URLの形式が正しくありません');
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error('画像URLはhttpsから始まるURLを使用してください');
+  }
+
+  if (isTemporaryShopifyUploadUrl(parsed.toString())) {
+    throw new Error('Shopifyの一時アップロードURLは保存できません。正式なCDN URLを使用してください');
+  }
+
+  return parsed.toString();
+}
+
+async function shopifyFilesGraphql(query, variables = {}) {
+  const response = await fetch(SHOPIFY_FILES_GRAPHQL_URL, {
+    method: 'POST',
+    headers: {
+      'X-Shopify-Access-Token': ACCESS_TOKEN,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ query, variables })
+  });
+
+  const responseText = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(responseText);
+  } catch (_) {
+    throw new Error(`Shopify API returned invalid JSON: ${response.status} ${responseText.slice(0, 300)}`);
+  }
+
+  const actualApiVersion = response.headers.get('x-shopify-api-version');
+  if (actualApiVersion && actualApiVersion !== SHOPIFY_FILES_API_VERSION) {
+    console.warn(`⚠️ Shopify API version fallback: requested=${SHOPIFY_FILES_API_VERSION} actual=${actualApiVersion}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Shopify API HTTP error: ${response.status} ${JSON.stringify(payload)}`);
+  }
+  if (payload.errors?.length) {
+    throw new Error(`Shopify GraphQL error: ${JSON.stringify(payload.errors)}`);
+  }
+
+  return payload.data;
+}
+
+async function waitForShopifyImageReady(fileId, maxAttempts = 30, intervalMs = 1000) {
+  const query = `
+    query GetUploadedImage($id: ID!) {
+      node(id: $id) {
+        ... on MediaImage {
+          id
+          fileStatus
+          image {
+            url
+          }
+        }
+      }
+    }
+  `;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const data = await shopifyFilesGraphql(query, { id: fileId });
+    const file = data?.node;
+
+    if (!file) {
+      throw new Error(`Shopify上の画像ファイルが見つかりません: ${fileId}`);
+    }
+    if (file.fileStatus === 'FAILED') {
+      throw new Error(`Shopifyの画像処理に失敗しました: ${fileId}`);
+    }
+
+    const permanentUrl = file.image?.url || null;
+    if (file.fileStatus === 'READY' && permanentUrl) {
+      if (isTemporaryShopifyUploadUrl(permanentUrl)) {
+        throw new Error('Shopifyから一時URLが返されたため保存を中止しました');
+      }
+      return permanentUrl;
+    }
+
+    if (attempt === 1 || attempt % 5 === 0) {
+      console.log(`📷 Shopify image processing: id=${fileId} status=${file.fileStatus} attempt=${attempt}/${maxAttempts}`);
+    }
+    await sleep(intervalMs);
+  }
+
+  throw new Error('Shopifyの画像処理が時間内に完了しませんでした。少し待ってから再度お試しください');
+}
 
 async function loadAccessToken() {
   try {
@@ -413,179 +528,160 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
   if (!req.file) {
     console.warn('⚠️ upload: ファイルなし');
-    return res.json({ ok: false, message: 'ファイルがありません' });
+    return res.status(400).json({ ok: false, message: 'ファイルがありません' });
   }
 
   if (!ACCESS_TOKEN) {
     console.error('❌ upload: ACCESS_TOKEN がありません');
-    return res.json({ ok: false, message: 'Shopify連携トークンがありません' });
+    return res.status(500).json({ ok: false, message: 'Shopify連携トークンがありません' });
   }
 
   try {
-    const fs = await import('fs');
     const fileData = fs.readFileSync(req.file.path);
     const mimeType = req.file.mimetype || 'image/jpeg';
     const filename = req.file.originalname || `review-${Date.now()}.jpg`;
 
+    if (!mimeType.startsWith('image/')) {
+      return res.status(400).json({ ok: false, message: '画像ファイルを選択してください' });
+    }
+
     console.log('📷 upload file:', {
       filename,
       mimeType,
-      size: req.file.size
+      size: req.file.size,
+      apiVersion: SHOPIFY_FILES_API_VERSION
     });
 
-    const stagingRes = await fetch(
-      `https://${SHOPIFY_SHOP}/admin/api/2025-01/graphql.json`,
-      {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': ACCESS_TOKEN,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          query: `
-            mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
-              stagedUploadsCreate(input: $input) {
-                stagedTargets {
-                  url
-                  resourceUrl
-                  parameters {
-                    name
-                    value
-                  }
-                }
-                userErrors {
-                  field
-                  message
-                }
+    const stagingData = await shopifyFilesGraphql(
+      `
+        mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+          stagedUploadsCreate(input: $input) {
+            stagedTargets {
+              url
+              resourceUrl
+              parameters {
+                name
+                value
               }
             }
-          `,
-          variables: {
-            input: [
-              {
-                filename,
-                mimeType,
-                resource: 'FILE',
-                fileSize: String(req.file.size),
-                httpMethod: 'POST'
-              }
-            ]
+            userErrors {
+              field
+              message
+            }
           }
-        })
+        }
+      `,
+      {
+        input: [
+          {
+            filename,
+            mimeType,
+            resource: 'IMAGE',
+            fileSize: String(req.file.size),
+            httpMethod: 'POST'
+          }
+        ]
       }
     );
 
-    const stagingData = await stagingRes.json();
-    console.log('📷 staging status:', stagingRes.status);
-    console.log('📷 staging response:', JSON.stringify(stagingData, null, 2));
-
-    const stagingErrors = stagingData.data?.stagedUploadsCreate?.userErrors || [];
-    if (!stagingRes.ok || stagingErrors.length > 0) {
-      throw new Error(`stagedUploadsCreate failed: ${JSON.stringify(stagingErrors || stagingData)}`);
+    const stagingErrors = stagingData?.stagedUploadsCreate?.userErrors || [];
+    if (stagingErrors.length > 0) {
+      throw new Error(`stagedUploadsCreate failed: ${JSON.stringify(stagingErrors)}`);
     }
 
-    const target = stagingData.data?.stagedUploadsCreate?.stagedTargets?.[0];
-    if (!target) {
+    const target = stagingData?.stagedUploadsCreate?.stagedTargets?.[0];
+    if (!target?.url || !target?.resourceUrl) {
       throw new Error('stagedUploadsCreate target が取得できません');
     }
 
     const formData = new FormData();
-    target.parameters.forEach((p) => {
-      formData.append(p.name, p.value);
+    target.parameters.forEach((parameter) => {
+      formData.append(parameter.name, parameter.value);
     });
-
     formData.append('file', new Blob([fileData], { type: mimeType }), filename);
 
     const uploadToStorageRes = await fetch(target.url, {
       method: 'POST',
       body: formData
     });
-
     const uploadToStorageText = await uploadToStorageRes.text();
-    console.log('📷 storage upload status:', uploadToStorageRes.status);
-    console.log('📷 storage upload response:', uploadToStorageText.slice(0, 500));
 
+    console.log('📷 storage upload status:', uploadToStorageRes.status);
     if (!uploadToStorageRes.ok) {
-      throw new Error(`storage upload failed: ${uploadToStorageRes.status} ${uploadToStorageText}`);
+      throw new Error(`storage upload failed: ${uploadToStorageRes.status} ${uploadToStorageText.slice(0, 500)}`);
     }
 
-    const fileCreateRes = await fetch(
-      `https://${SHOPIFY_SHOP}/admin/api/2025-01/graphql.json`,
-      {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': ACCESS_TOKEN,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          query: `
-            mutation fileCreate($files: [FileCreateInput!]!) {
-              fileCreate(files: $files) {
-                files {
-                  id
-                  fileStatus
-                  alt
-                  createdAt
-                  ... on MediaImage {
-                    image {
-                      url
-                    }
-                  }
-                }
-                userErrors {
-                  field
-                  message
+    const fileCreateData = await shopifyFilesGraphql(
+      `
+        mutation fileCreate($files: [FileCreateInput!]!) {
+          fileCreate(files: $files) {
+            files {
+              id
+              fileStatus
+              alt
+              createdAt
+              ... on MediaImage {
+                image {
+                  url
                 }
               }
             }
-          `,
-          variables: {
-            files: [
-              {
-                originalSource: target.resourceUrl,
-                contentType: 'IMAGE',
-                alt: filename
-              }
-            ]
+            userErrors {
+              field
+              message
+            }
           }
-        })
+        }
+      `,
+      {
+        files: [
+          {
+            originalSource: target.resourceUrl,
+            contentType: 'IMAGE',
+            alt: filename
+          }
+        ]
       }
     );
 
-    const fileCreateData = await fileCreateRes.json();
-    console.log('📷 fileCreate status:', fileCreateRes.status);
-    console.log('📷 fileCreate response:', JSON.stringify(fileCreateData, null, 2));
-
-    const fileCreateErrors = fileCreateData.data?.fileCreate?.userErrors || [];
-    if (!fileCreateRes.ok || fileCreateErrors.length > 0) {
-      throw new Error(`fileCreate failed: ${JSON.stringify(fileCreateErrors || fileCreateData)}`);
+    const fileCreateErrors = fileCreateData?.fileCreate?.userErrors || [];
+    if (fileCreateErrors.length > 0) {
+      throw new Error(`fileCreate failed: ${JSON.stringify(fileCreateErrors)}`);
     }
 
-    const file = fileCreateData.data?.fileCreate?.files?.[0];
-    const url = file?.image?.url || target.resourceUrl;
-
-    fs.unlinkSync(req.file.path);
-
-    if (!url) {
-      throw new Error('画像URLが取得できません');
+    const file = fileCreateData?.fileCreate?.files?.[0];
+    if (!file?.id) {
+      throw new Error('ShopifyのファイルIDが取得できません');
     }
 
-    console.log('✅ upload success:', url);
-    res.json({ ok: true, url });
+    // fileCreate is asynchronous. Never fall back to target.resourceUrl because it is temporary.
+    let permanentUrl = file.image?.url || null;
+    if (!permanentUrl || file.fileStatus !== 'READY') {
+      permanentUrl = await waitForShopifyImageReady(file.id);
+    }
+
+    permanentUrl = normalizePermanentImageUrl(permanentUrl);
+    if (!permanentUrl) {
+      throw new Error('正式な画像URLが取得できません');
+    }
+
+    console.log('✅ upload success:', { fileId: file.id, url: permanentUrl });
+    return res.json({ ok: true, url: permanentUrl, fileId: file.id });
   } catch (e) {
     console.error('❌ Upload error:', e);
+    return res.status(500).json({
+      ok: false,
+      message: '画像の正式保存に失敗しました。時間を置いて再度お試しください',
+      error: e.message
+    });
+  } finally {
     try {
-      const fs = await import('fs');
       if (req.file?.path && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
       }
-    } catch (_) {}
-
-    res.json({
-      ok: false,
-      message: 'アップロードに失敗しました',
-      error: e.message
-    });
+    } catch (cleanupError) {
+      console.warn('⚠️ upload temp file cleanup failed:', cleanupError.message);
+    }
   }
 });
 
@@ -595,6 +691,13 @@ const REVIEW_POINTS = 500;
 app.post('/reviews', async (req, res) => {
   const { customerId, productId, productName, authorName, email, rating, title, body, imageUrl } = req.body;
   if (!customerId || !productId || !rating) return res.json({ ok: false, message: '必須項目が不足しています' });
+
+  let permanentImageUrl;
+  try {
+    permanentImageUrl = normalizePermanentImageUrl(imageUrl);
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
 
   const shopDomain = SHOPIFY_SHOP;
   try {
@@ -616,7 +719,7 @@ app.post('/reviews', async (req, res) => {
         rating,
         title || null,
         body,
-        imageUrl || null,
+        permanentImageUrl,
         'hidden'
       ]
     );
@@ -698,6 +801,13 @@ app.post('/admin/api/reviews', adminAuth, async (req, res) => {
   const normalizedRating = parseInt(rating, 10);
   const normalizedStatus = status === 'hidden' ? 'hidden' : 'published';
 
+  let permanentImageUrl;
+  try {
+    permanentImageUrl = normalizePermanentImageUrl(imageUrl);
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
+
   if (!productId || !productName || !body) {
     return res.json({ ok: false, message: '必須項目が不足しています' });
   }
@@ -722,7 +832,7 @@ app.post('/admin/api/reviews', adminAuth, async (req, res) => {
         normalizedRating,
         title || null,
         body,
-        imageUrl || null,
+        permanentImageUrl,
         normalizedStatus
       ]
     );
@@ -738,6 +848,13 @@ app.put('/admin/api/reviews/:id', adminAuth, async (req, res) => {
   const { productId, productName, authorName, email, rating, title, body, imageUrl, status } = req.body;
   const normalizedRating = parseInt(rating, 10);
   const normalizedStatus = status === 'hidden' ? 'hidden' : 'published';
+
+  let permanentImageUrl;
+  try {
+    permanentImageUrl = normalizePermanentImageUrl(imageUrl);
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
 
   if (!productId || !productName || !body) {
     return res.json({ ok: false, message: '必須項目が不足しています' });
@@ -769,7 +886,7 @@ app.put('/admin/api/reviews/:id', adminAuth, async (req, res) => {
         normalizedRating,
         title || null,
         body,
-        imageUrl || null,
+        permanentImageUrl,
         normalizedStatus,
         req.params.id
       ]
@@ -799,6 +916,13 @@ app.post('/admin/api/reviews/:id/edit', adminAuth, async (req, res) => {
   const normalizedRating = parseInt(rating, 10);
   const normalizedStatus = status === 'hidden' ? 'hidden' : 'published';
 
+  let permanentImageUrl;
+  try {
+    permanentImageUrl = normalizePermanentImageUrl(imageUrl);
+  } catch (e) {
+    return res.status(400).json({ ok: false, message: e.message });
+  }
+
   if (!productId || !productName || !body) {
     return res.json({ ok: false, message: '必須項目が不足しています' });
   }
@@ -829,7 +953,7 @@ app.post('/admin/api/reviews/:id/edit', adminAuth, async (req, res) => {
         normalizedRating,
         title || null,
         body,
-        imageUrl || null,
+        permanentImageUrl,
         normalizedStatus,
         req.params.id
       ]
