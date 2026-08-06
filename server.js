@@ -151,6 +151,25 @@ async function waitForShopifyImageReady(fileId, maxAttempts = 30, intervalMs = 1
   throw new Error('Shopifyの画像処理が時間内に完了しませんでした。少し待ってから再度お試しください');
 }
 
+async function getShopifyProductForReview(productId) {
+  const data = await shopifyFilesGraphql(
+    `
+      query GetReviewProduct($id: ID!) {
+        product(id: $id) {
+          handle
+          title
+          featuredImage {
+            url
+          }
+        }
+      }
+    `,
+    { id: `gid://shopify/Product/${productId}` }
+  );
+
+  return data?.product || null;
+}
+
 async function loadAccessToken() {
   try {
     const result = await pool.query(
@@ -689,8 +708,29 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 const REVIEW_POINTS = 500;
 
 app.post('/reviews', async (req, res) => {
-  const { customerId, productId, productName, authorName, email, rating, title, body, imageUrl } = req.body;
-  if (!customerId || !productId || !rating) return res.json({ ok: false, message: '必須項目が不足しています' });
+  const {
+    customerId,
+    purchaseId,
+    productId,
+    productName,
+    authorName,
+    email,
+    rating,
+    title,
+    body,
+    imageUrl
+  } = req.body;
+  const normalizedRating = parseInt(rating, 10);
+
+  if (!customerId || !productId || !body) {
+    return res.status(400).json({ ok: false, message: '必須項目が不足しています' });
+  }
+  if (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5) {
+    return res.status(400).json({ ok: false, message: '評価は1〜5で入力してください' });
+  }
+  if (purchaseId && !/^\d+$/.test(String(purchaseId))) {
+    return res.status(400).json({ ok: false, message: '購入情報が正しくありません' });
+  }
 
   let permanentImageUrl;
   try {
@@ -700,46 +740,144 @@ app.post('/reviews', async (req, res) => {
   }
 
   const shopDomain = SHOPIFY_SHOP;
+  let client;
   try {
-    const dup = await pool.query(
-      'SELECT id FROM reviews WHERE customer_id = $1 AND product_id = $2',
-      [customerId, productId]
-    );
-    if (dup.rows.length > 0) return res.json({ ok: false, message: 'この商品はすでにレビュー済みです' });
+    client = await pool.connect();
+    await client.query('BEGIN');
 
-    await pool.query(
-      'INSERT INTO reviews (customer_id, shop_domain, product_id, product_name, author_name, email, rating, title, body, image_url, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+    // 同一顧客・同一商品への同時投稿を直列化し、ポイントの二重付与を防ぐ。
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+      [`${shopDomain}:${customerId}`, purchaseId ? `purchase:${purchaseId}` : `product:${productId}`]
+    );
+
+    let purchase = null;
+    if (purchaseId) {
+      const purchaseResult = await client.query(
+        `SELECT id, product_id, product_name, order_id, order_name
+         FROM review_purchases
+         WHERE id = $1
+           AND customer_id = $2
+           AND shop_domain = $3
+           AND reviewed_at IS NULL
+           AND cancelled_at IS NULL
+         FOR UPDATE`,
+        [purchaseId, customerId, shopDomain]
+      );
+      purchase = purchaseResult.rows[0] || null;
+
+      if (!purchase) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ ok: false, message: 'この購入分はすでにレビュー済み、またはレビュー対象外です' });
+      }
+    } else {
+      // 旧画面との互換用。候補が1件だけなら購入IDなしでも安全に処理できる。
+      const purchaseResult = await client.query(
+        `SELECT id, product_id, product_name, order_id, order_name
+         FROM review_purchases
+         WHERE customer_id = $1
+           AND shop_domain = $2
+           AND product_id = $3
+           AND reviewed_at IS NULL
+           AND cancelled_at IS NULL
+         ORDER BY purchased_at ASC NULLS LAST, id ASC
+         LIMIT 2
+         FOR UPDATE`,
+        [customerId, shopDomain, productId]
+      );
+
+      if (purchaseResult.rows.length > 1) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          ok: false,
+          message: '複数の購入履歴があります。ページを再読み込みしてから再度お試しください'
+        });
+      }
+      purchase = purchaseResult.rows[0] || null;
+    }
+
+    const savedProductId = purchase?.product_id || productId;
+    const savedProductName = purchase?.product_name || productName;
+
+    if (!purchase) {
+      // マイグレーション前の購入履歴は購入IDを持たないため、従来どおり商品単位で1回だけ許可する。
+      const duplicateResult = await client.query(
+        'SELECT id FROM reviews WHERE customer_id = $1 AND shop_domain = $2 AND product_id = $3 LIMIT 1',
+        [customerId, shopDomain, savedProductId]
+      );
+      if (duplicateResult.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ ok: false, message: 'この購入分はすでにレビュー済みです' });
+      }
+    }
+
+    const reviewResult = await client.query(
+      `INSERT INTO reviews
+       (customer_id, shop_domain, product_id, product_name, author_name, email, rating, title, body, image_url, status, purchase_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING id`,
       [
         customerId,
         shopDomain,
-        productId,
-        productName,
+        savedProductId,
+        savedProductName,
         authorName || '匿名',
         email || null,
-        rating,
+        normalizedRating,
         title || null,
         body,
         permanentImageUrl,
-        'hidden'
+        'hidden',
+        purchase?.id || null
       ]
     );
+    const reviewId = reviewResult.rows[0].id;
 
-    await pool.query(
+    if (purchase) {
+      await client.query(
+        `UPDATE review_purchases
+         SET reviewed_at = NOW(), review_id = $1, updated_at = NOW()
+         WHERE id = $2`,
+        [reviewId, purchase.id]
+      );
+    }
+
+    await client.query(
       `INSERT INTO customer_points (customer_id, shop_domain, points, total_earned) VALUES ($1, $2, $3, $3)
        ON CONFLICT (customer_id, shop_domain) DO UPDATE SET points = customer_points.points + $3, total_earned = customer_points.total_earned + $3, updated_at = NOW()`,
       [customerId, shopDomain, REVIEW_POINTS]
     );
 
-    await pool.query(
-      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason) VALUES ($1, $2, $3, 'review', 'レビュー投稿ポイント')",
-      [customerId, shopDomain, REVIEW_POINTS]
+    await client.query(
+      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason) VALUES ($1, $2, $3, 'review', $4)",
+      [
+        customerId,
+        shopDomain,
+        REVIEW_POINTS,
+        purchase?.order_name
+          ? `レビュー投稿ポイント（${purchase.order_name}）`
+          : 'レビュー投稿ポイント'
+      ]
     );
 
-    console.log(`✅ レビューポイント付与: customer=${customerId} +${REVIEW_POINTS}pt`);
-    res.json({ ok: true, points: REVIEW_POINTS });
+    await client.query('COMMIT');
+    console.log(`✅ レビューポイント付与: customer=${customerId} purchase=${purchase?.id || 'legacy'} +${REVIEW_POINTS}pt`);
+    return res.json({ ok: true, points: REVIEW_POINTS, reviewId });
   } catch (e) {
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (_) {
+        // 元のエラーを優先する。
+      }
+    }
     console.error('Review error:', e);
-    res.json({ ok: false, message: 'エラーが発生しました' });
+    if (e.code === '23505') {
+      return res.status(409).json({ ok: false, message: 'この購入分はすでにレビュー済みです' });
+    }
+    return res.status(500).json({ ok: false, message: 'レビューの投稿に失敗しました' });
+  } finally {
+    client?.release();
   }
 });
 
@@ -789,9 +927,18 @@ app.get('/review-summary', async (req, res) => {
 
 app.get('/admin/api/reviews', adminAuth, async (_req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC');
+    const result = await pool.query(
+      `SELECT r.*,
+              rp.order_id AS review_order_id,
+              rp.order_name AS review_order_name,
+              rp.purchased_at AS review_purchased_at
+       FROM reviews r
+       LEFT JOIN review_purchases rp ON rp.id = r.purchase_id
+       ORDER BY r.created_at DESC`
+    );
     res.json(result.rows);
   } catch (e) {
+    console.error('Admin reviews load error:', e);
     res.json([]);
   }
 });
@@ -1068,45 +1215,33 @@ app.post('/webhook/orders-paid', async (req, res) => {
   const customerId = order.customer?.id?.toString();
   const email = order.customer?.email || '';
   if (!customerId) return res.status(200).send('no customer');
-
-  const dup = await pool.query(
-    "SELECT id FROM point_logs WHERE order_id = $1 AND type = 'purchase'",
-    [order.id.toString()]
-  );
-  if (dup.rows.length > 0) return res.status(200).send('already processed');
-
-  const totalPrice = parseFloat(order.subtotal_price || order.total_price || 0);
-  const pointsToAdd = Math.floor(totalPrice / 100) * POINT_RATE;
-  if (pointsToAdd <= 0) return res.status(200).send('no points');
+  const orderId = order.id?.toString();
+  if (!orderId) return res.status(200).send('no order id');
 
   try {
-    await pool.query(
-      `INSERT INTO customer_points (customer_id, shop_domain, email, points, total_earned) VALUES ($1, $2, $3, $4, $4)
-       ON CONFLICT (customer_id, shop_domain) DO UPDATE SET points = customer_points.points + $4, total_earned = customer_points.total_earned + $4, email = EXCLUDED.email, updated_at = NOW()`,
-      [customerId, SHOPIFY_SHOP, email, pointsToAdd]
-    );
+    const orderName = order.name || (order.order_number ? `#${order.order_number}` : orderId);
+    const purchasedAt = order.processed_at || order.created_at || new Date().toISOString();
+    const productCache = new Map();
 
-    await pool.query(
-      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason, order_id) VALUES ($1, $2, $3, 'purchase', $4, $5)",
-      [customerId, SHOPIFY_SHOP, pointsToAdd, `注文 #${order.order_number} 購入ポイント`, order.id.toString()]
-    );
-
-    console.log(`✅ ポイント付与: customer=${customerId} +${pointsToAdd}pt (注文#${order.order_number})`);
-    for (const item of order.line_items || []) {
+    // ポイント付与済みのWebhook再送でも、購入単位のレビュー権利は必ず補完する。
+    for (const [itemIndex, item] of (order.line_items || []).entries()) {
       if (!item.product_id) continue;
-    
+
       let productHandle = null;
+      let productImageUrl = item.image?.src || null;
       try {
-        const productRes = await fetch(
-          `https://${SHOPIFY_SHOP}/admin/api/2025-01/products/${item.product_id}.json`,
-          { headers: { 'X-Shopify-Access-Token': ACCESS_TOKEN } }
-        );
-        const productData = await productRes.json();
-        productHandle = productData.product?.handle || null;
+        const cacheKey = String(item.product_id);
+        let productData = productCache.get(cacheKey);
+        if (productData === undefined) {
+          productData = ACCESS_TOKEN ? await getShopifyProductForReview(item.product_id) : null;
+          productCache.set(cacheKey, productData);
+        }
+        productHandle = productData?.handle || null;
+        productImageUrl = productImageUrl || productData?.featuredImage?.url || null;
       } catch (e) {
         console.error('product handle fetch error:', e);
       }
-    
+
       if (!productHandle || productHandle.trim() === '') {
         productHandle = item.product_id?.toString() || item.sku || item.title;
         console.warn('⚠️ productHandle取得失敗。代替IDで保存:', {
@@ -1115,28 +1250,84 @@ app.post('/webhook/orders-paid', async (req, res) => {
           fallback: productHandle
         });
       }
-    
-      try {
-        await pool.query(
-          `INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name, image_url)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (customer_id, shop_domain, product_id) DO NOTHING`,
-          [customerId, SHOPIFY_SHOP, productHandle, item.title, item.image?.src || null]
-        );
-        console.log('✅ 購入商品保存:', {
+
+      const lineItemId = item.id?.toString() || `${orderId}:${item.product_id}:${itemIndex}`;
+      const parsedQuantity = parseInt(item.quantity || '1', 10);
+      const quantity = Number.isInteger(parsedQuantity) && parsedQuantity > 0 ? parsedQuantity : 1;
+
+      await pool.query(
+        `INSERT INTO review_purchases
+         (customer_id, shop_domain, order_id, order_name, line_item_id, product_id, product_name, image_url, quantity, purchased_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (shop_domain, order_id, line_item_id)
+         DO UPDATE SET
+           customer_id = EXCLUDED.customer_id,
+           order_name = EXCLUDED.order_name,
+           product_id = EXCLUDED.product_id,
+           product_name = EXCLUDED.product_name,
+           image_url = COALESCE(EXCLUDED.image_url, review_purchases.image_url),
+           quantity = EXCLUDED.quantity,
+           purchased_at = EXCLUDED.purchased_at,
+           updated_at = NOW()`,
+        [
           customerId,
-          productId: productHandle,
-          productName: item.title
-        });
-      } catch (e) {
-        console.error('customer_products insert error:', e);
-      }
+          SHOPIFY_SHOP,
+          orderId,
+          orderName,
+          lineItemId,
+          productHandle,
+          item.title,
+          productImageUrl,
+          quantity,
+          purchasedAt
+        ]
+      );
+
+      // 既存画面・既存データとの互換用。リピート購入の判定は review_purchases を使用する。
+      await pool.query(
+        `INSERT INTO customer_products (customer_id, shop_domain, product_id, product_name, image_url)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (customer_id, shop_domain, product_id)
+         DO UPDATE SET
+           product_name = EXCLUDED.product_name,
+           image_url = COALESCE(EXCLUDED.image_url, customer_products.image_url)`,
+        [customerId, SHOPIFY_SHOP, productHandle, item.title, productImageUrl]
+      );
+
+      console.log('✅ レビュー購入権利保存:', {
+        customerId,
+        orderId,
+        lineItemId,
+        productId: productHandle
+      });
     }
 
-    res.status(200).send('ok');
+    const duplicatePoints = await pool.query(
+      "SELECT id FROM point_logs WHERE order_id = $1 AND type = 'purchase'",
+      [orderId]
+    );
+    if (duplicatePoints.rows.length > 0) return res.status(200).send('already processed');
+
+    const totalPrice = parseFloat(order.subtotal_price || order.total_price || 0);
+    const pointsToAdd = Math.floor(totalPrice / 100) * POINT_RATE;
+    if (pointsToAdd <= 0) return res.status(200).send('purchase saved; no points');
+
+    await pool.query(
+      `INSERT INTO customer_points (customer_id, shop_domain, email, points, total_earned) VALUES ($1, $2, $3, $4, $4)
+       ON CONFLICT (customer_id, shop_domain) DO UPDATE SET points = customer_points.points + $4, total_earned = customer_points.total_earned + $4, email = EXCLUDED.email, updated_at = NOW()`,
+      [customerId, SHOPIFY_SHOP, email, pointsToAdd]
+    );
+
+    await pool.query(
+      "INSERT INTO point_logs (customer_id, shop_domain, points_change, type, reason, order_id) VALUES ($1, $2, $3, 'purchase', $4, $5)",
+      [customerId, SHOPIFY_SHOP, pointsToAdd, `注文 ${orderName} 購入ポイント`, orderId]
+    );
+
+    console.log(`✅ ポイント付与: customer=${customerId} +${pointsToAdd}pt (${orderName})`);
+    return res.status(200).send('ok');
   } catch (e) {
     console.error('Webhook error:', e);
-    res.status(500).send('error');
+    return res.status(500).send('error');
   }
 });
 
@@ -1224,6 +1415,14 @@ app.post('/webhook/orders-cancelled', async (req, res) => {
   if (!customerId) return res.status(200).send('no customer');
 
   try {
+    // キャンセル済み注文からは新しいレビューとレビュー500ptを獲得できないようにする。
+    await pool.query(
+      `UPDATE review_purchases
+       SET cancelled_at = COALESCE(cancelled_at, NOW()), updated_at = NOW()
+       WHERE shop_domain = $1 AND order_id = $2`,
+      [SHOPIFY_SHOP, order.id.toString()]
+    );
+
     // 元の付与ログを確認
     const log = await pool.query(
       "SELECT points_change FROM point_logs WHERE order_id = $1 AND type = 'purchase'",
@@ -1315,6 +1514,8 @@ app.post('/webhook/customers-deleted', async (req, res) => {
     await pool.query('DELETE FROM point_logs WHERE customer_id = $1 AND shop_domain = $2', [customerId, SHOPIFY_SHOP]);
     await pool.query('DELETE FROM gacha_history WHERE customer_id = $1', [customerId]);
     await pool.query('DELETE FROM reviews WHERE customer_id = $1 AND shop_domain = $2', [customerId, SHOPIFY_SHOP]);
+    await pool.query('DELETE FROM review_purchases WHERE customer_id = $1 AND shop_domain = $2', [customerId, SHOPIFY_SHOP]);
+    await pool.query('DELETE FROM customer_products WHERE customer_id = $1 AND shop_domain = $2', [customerId, SHOPIFY_SHOP]);
 
     console.log(`✅ 顧客削除: customer=${customerId}`);
     res.status(200).send('ok');
@@ -1344,24 +1545,81 @@ app.get('/my-orders', async (req, res) => {
   if (!customerId) return res.json({ ok: false, products: [] });
   try {
     const result = await pool.query(
-      `SELECT cp.product_id, cp.product_name, cp.image_url
-       FROM customer_products cp
-       JOIN customer_points cpt ON cpt.customer_id = cp.customer_id AND cpt.shop_domain = cp.shop_domain
-       WHERE cp.customer_id = $1 AND cp.shop_domain = $2
-       AND NOT EXISTS (
-         SELECT 1 FROM reviews r
-         WHERE r.product_id = cp.product_id
-         AND (
-           r.customer_id = cp.customer_id
-           OR r.email = cpt.email
-         )
-       )`,
+      `WITH ranked_purchases AS (
+         SELECT rp.id AS purchase_id,
+                rp.product_id,
+                rp.product_name,
+                rp.image_url,
+                rp.order_name,
+                rp.purchased_at,
+                COUNT(*) OVER (PARTITION BY rp.product_id) AS reviewable_count,
+                ROW_NUMBER() OVER (
+                  PARTITION BY rp.product_id
+                  ORDER BY rp.purchased_at ASC NULLS LAST, rp.id ASC
+                ) AS purchase_rank
+         FROM review_purchases rp
+         WHERE rp.customer_id = $1
+           AND rp.shop_domain = $2
+           AND rp.reviewed_at IS NULL
+           AND rp.cancelled_at IS NULL
+       ),
+       purchase_candidates AS (
+         SELECT purchase_id,
+                product_id,
+                product_name,
+                image_url,
+                order_name,
+                purchased_at,
+                reviewable_count
+         FROM ranked_purchases
+         WHERE purchase_rank = 1
+       ),
+       legacy_candidates AS (
+         SELECT NULL::bigint AS purchase_id,
+                cp.product_id,
+                cp.product_name,
+                cp.image_url,
+                NULL::text AS order_name,
+                NULL::timestamptz AS purchased_at,
+                1::bigint AS reviewable_count
+         FROM customer_products cp
+         JOIN customer_points cpt
+           ON cpt.customer_id = cp.customer_id
+          AND cpt.shop_domain = cp.shop_domain
+         WHERE cp.customer_id = $1
+           AND cp.shop_domain = $2
+           AND NOT EXISTS (
+             SELECT 1
+             FROM review_purchases rp
+             WHERE rp.customer_id = cp.customer_id
+               AND rp.shop_domain = cp.shop_domain
+               AND rp.product_id = cp.product_id
+           )
+           AND NOT EXISTS (
+             SELECT 1
+             FROM reviews r
+             WHERE r.product_id = cp.product_id
+               AND r.shop_domain = cp.shop_domain
+               AND (
+                 r.customer_id = cp.customer_id
+                 OR (cpt.email IS NOT NULL AND r.email = cpt.email)
+               )
+           )
+       )
+       SELECT * FROM purchase_candidates
+       UNION ALL
+       SELECT * FROM legacy_candidates
+       ORDER BY purchased_at DESC NULLS LAST, product_name ASC`,
       [customerId, SHOPIFY_SHOP]
     );
     const products = result.rows.map(r => ({
+      purchaseId: r.purchase_id || null,
       productId: r.product_id,
       productName: r.product_name,
-      imageUrl: r.image_url || null
+      imageUrl: r.image_url || null,
+      orderName: r.order_name || null,
+      purchasedAt: r.purchased_at || null,
+      reviewableCount: Number(r.reviewable_count || 1)
     }));
     res.json({ ok: true, products });
   } catch (e) {

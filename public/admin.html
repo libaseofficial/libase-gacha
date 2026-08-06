@@ -783,7 +783,13 @@ async function loadReviews() {
         <div>${r.author_name || '-'}</div>
         <div style="font-size:12px;color:#aaa;">${r.email || ''}</div>
       </td>
-      <td style="font-size:13px;">${r.product_name || '-'}</td>
+      <td style="font-size:13px;">
+        <div>${r.product_name || '-'}</div>
+        ${r.review_order_name
+          ? `<div style="font-size:11px;color:#999;margin-top:4px;">購入：${r.review_order_name}</div>`
+          : `<div style="font-size:11px;color:#bbb;margin-top:4px;">旧データ</div>`
+        }
+      </td>
       <td><span class="stars">${starsHtml(r.rating)}</span></td>
       <td>
         ${r.title ? `<div style="font-weight:bold;font-size:13px;">${r.title}</div>` : ''}
@@ -847,8 +853,8 @@ async function saveReviewEdit() {
   if (!body.productName) return alert('商品名を入力してください');
   if (!body.body) return alert('本文を入力してください');
 
-  const res = await fetch('/admin/api/reviews/' + id, {
-    method: 'PUT',
+  const res = await fetch('/admin/api/reviews/' + id + '/edit', {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': AUTH
@@ -868,8 +874,8 @@ async function saveReviewEdit() {
 
 async function deleteReview(id) {
   if (!confirm('このレビューを削除しますか？')) return;
-  const res = await fetch('/admin/api/reviews/' + id, {
-    method: 'DELETE',
+  const res = await fetch('/admin/api/reviews/' + id + '/delete', {
+    method: 'POST',
     headers: { 'Authorization': AUTH }
   });
   const data = await res.json();
