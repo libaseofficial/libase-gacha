@@ -706,6 +706,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
 // レビューAPI
 const REVIEW_POINTS = 500;
+const REVIEW_IMAGE_POINTS = 1000;
 
 app.post('/reviews', async (req, res) => {
   const {
@@ -739,6 +740,7 @@ app.post('/reviews', async (req, res) => {
     return res.status(400).json({ ok: false, message: e.message });
   }
 
+  const reviewPoints = permanentImageUrl ? REVIEW_IMAGE_POINTS : REVIEW_POINTS;
   const shopDomain = SHOPIFY_SHOP;
   let client;
   try {
@@ -845,7 +847,7 @@ app.post('/reviews', async (req, res) => {
     await client.query(
       `INSERT INTO customer_points (customer_id, shop_domain, points, total_earned) VALUES ($1, $2, $3, $3)
        ON CONFLICT (customer_id, shop_domain) DO UPDATE SET points = customer_points.points + $3, total_earned = customer_points.total_earned + $3, updated_at = NOW()`,
-      [customerId, shopDomain, REVIEW_POINTS]
+      [customerId, shopDomain, reviewPoints]
     );
 
     await client.query(
@@ -853,7 +855,7 @@ app.post('/reviews', async (req, res) => {
       [
         customerId,
         shopDomain,
-        REVIEW_POINTS,
+        reviewPoints,
         purchase?.order_name
           ? `レビュー投稿ポイント（${purchase.order_name}）`
           : 'レビュー投稿ポイント'
@@ -861,8 +863,8 @@ app.post('/reviews', async (req, res) => {
     );
 
     await client.query('COMMIT');
-    console.log(`✅ レビューポイント付与: customer=${customerId} purchase=${purchase?.id || 'legacy'} +${REVIEW_POINTS}pt`);
-    return res.json({ ok: true, points: REVIEW_POINTS, reviewId });
+    console.log(`✅ レビューポイント付与: customer=${customerId} purchase=${purchase?.id || 'legacy'} +${reviewPoints}pt`);
+    return res.json({ ok: true, points: reviewPoints, reviewId });
   } catch (e) {
     if (client) {
       try {
@@ -1415,7 +1417,7 @@ app.post('/webhook/orders-cancelled', async (req, res) => {
   if (!customerId) return res.status(200).send('no customer');
 
   try {
-    // キャンセル済み注文からは新しいレビューとレビュー500ptを獲得できないようにする。
+    // キャンセル済み注文からは新しいレビューとレビューポイントを獲得できないようにする。
     await pool.query(
       `UPDATE review_purchases
        SET cancelled_at = COALESCE(cancelled_at, NOW()), updated_at = NOW()
