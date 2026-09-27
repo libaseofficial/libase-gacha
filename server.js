@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
+import { createLpRouter } from './lp/router.mjs';
 
 const { Pool } = pkg;
 const __filename = fileURLToPath(import.meta.url);
@@ -16,8 +17,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const upload = multer({ dest: 'uploads/' });
 
-app.use(cors());
+const legacyCors = cors();
+app.use((req, res, next) => req.path === '/lp' || req.path.startsWith('/lp/') ? next() : legacyCors(req, res, next));
 app.use((req, res, next) => {
+  if (req.path === '/lp' || req.path.startsWith('/lp/')) return next();
   if (req.path === '/webhook/orders-paid' || req.path === '/webhook/orders-cancelled' || req.path === '/webhook/customers-created' || req.path === '/webhook/customers-deleted') {
     express.raw({ type: 'application/json' })(req, res, next);
   } else {
@@ -184,7 +187,12 @@ async function loadAccessToken() {
   }
 }
 
-loadAccessToken();
+const accessTokenReady = loadAccessToken();
+const lpOffers = createLpRouter({
+  pool, shop: SHOPIFY_SHOP,
+  getAccessToken: async () => { await accessTokenReady; return ACCESS_TOKEN; }
+});
+app.use('/lp', lpOffers.router);
 
 const adminAuth = basicAuth({
   users: { 'admin': process.env.ADMIN_PASSWORD || 'libase2024' },
@@ -1214,6 +1222,7 @@ app.post('/webhook/orders-paid', async (req, res) => {
   }
 
   const order = JSON.parse(req.body);
+  void lpOffers.markUsed(order.discount_codes).catch(() => console.error('LP usage update failed; Shopify usage limit remains enforced.'));
   const customerId = order.customer?.id?.toString();
   const email = order.customer?.email || '';
   if (!customerId) return res.status(200).send('no customer');
