@@ -54,7 +54,10 @@ export function makeShopify({ shop, getAccessToken, fetcher = fetch }) {
         customerGets: { value: { percentage: 0.1 }, items: { all: true }, appliesOnOneTimePurchase: true, appliesOnSubscription: false },
         combinesWith: { orderDiscounts: false, productDiscounts: false, shippingDiscounts: false }
       }})).discountCodeBasicCreate;
-      if (result.userErrors?.length || !result.codeDiscountNode?.id) throw new OfferError(503, 'Shopify did not accept the LP discount.');
+      if (result.userErrors?.length || !result.codeDiscountNode?.id) {
+        console.error('LP discount validation:', JSON.stringify((result.userErrors || []).map(({ field, code, message }) => ({ field, code, message }))));
+        throw new OfferError(503, 'Shopify did not accept the LP discount.');
+      }
       return result.codeDiscountNode.id;
     }
   };
