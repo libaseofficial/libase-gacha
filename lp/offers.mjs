@@ -45,7 +45,7 @@ export function makeShopify({ shop, getAccessToken, fetcher = fetch }) {
   return {
     async find(code) { return (await graphql(FIND_DISCOUNT, { code })).codeDiscountNodeByCode?.codeDiscount || null; },
     async create(record) {
-      const result = (await graphql(CREATE_DISCOUNT, { input: {
+      const input = {
         title: 'LIBASE LP限定・本日10%OFF',
         code: record.code, context: { all: 'ALL' },
         startsAt: new Date(Number(record.created_at)).toISOString(),
@@ -53,7 +53,17 @@ export function makeShopify({ shop, getAccessToken, fetcher = fetch }) {
         usageLimit: 1, appliesOncePerCustomer: true,
         customerGets: { value: { percentage: 0.1 }, items: { all: true }, appliesOnOneTimePurchase: true, appliesOnSubscription: false },
         combinesWith: { orderDiscounts: false, productDiscounts: false, shippingDiscounts: false }
-      }})).discountCodeBasicCreate;
+      };
+      let result = (await graphql(CREATE_DISCOUNT, { input })).discountCodeBasicCreate;
+      const unsupportedPurchaseTypes = result.userErrors?.length && result.userErrors.every(error =>
+        error.code === 'INVALID' &&
+        ['appliesOnSubscription', 'appliesOnOneTimePurchase'].includes(error.field?.at(-1)) &&
+        error.message?.includes('not permitted without the shop using subscriptions')
+      );
+      if (!result.codeDiscountNode?.id && unsupportedPurchaseTypes) {
+        const { appliesOnSubscription, appliesOnOneTimePurchase, ...customerGets } = input.customerGets;
+        result = (await graphql(CREATE_DISCOUNT, { input: { ...input, customerGets } })).discountCodeBasicCreate;
+      }
       if (result.userErrors?.length || !result.codeDiscountNode?.id) {
         console.error('LP discount validation:', JSON.stringify((result.userErrors || []).map(({ field, code, message }) => ({ field, code, message }))));
         throw new OfferError(503, 'Shopify did not accept the LP discount.');

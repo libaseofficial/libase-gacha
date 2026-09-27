@@ -68,6 +68,17 @@ test('Shopify mutation grants all one-time products, 10%, one use, fixed expiry,
  assert.deepEqual(captured.body.variables.input.combinesWith,{orderDiscounts:false,productDiscounts:false,shippingDiscounts:false});
  assert.equal(captured.init.headers['X-Shopify-Access-Token'],'test-token');
 });
+test('stores without subscriptions retry only the unsupported purchase-type fields',async()=>{
+ const inputs=[];
+ const shop=makeShopify({shop:'example.myshopify.com',getAccessToken:async()=>'test-token',fetcher:async(url,init)=>{
+  inputs.push(JSON.parse(init.body).variables.input);
+  const result=inputs.length===1 ? {codeDiscountNode:null,userErrors:['appliesOnSubscription','appliesOnOneTimePurchase'].map(field=>({field:['basicCodeDiscount','customerGets',field],code:'INVALID',message:'field is not permitted without the shop using subscriptions.'}))} : {codeDiscountNode:{id:'id'},userErrors:[]};
+  return {ok:true,json:async()=>({data:{discountCodeBasicCreate:result}})};
+ }});
+ assert.equal(await shop.create({code:'LP'+'A'.repeat(24),created_at:1,ends_at:2}),'id');
+ assert.equal(inputs.length,2);
+ assert.deepEqual(inputs[1],{...inputs[0],customerGets:{value:{percentage:0.1},items:{all:true}}});
+});
 test('isolated HTTP routes enforce origin, JSON size and status/offer separation',async()=>{
  const f=fixture();const app=express();app.use('/lp',createLpRouter({env:{LP_ENABLED:'true',LP_VISITOR_SECRET:config.secret},service:f.service()}).router);
  app.get('/legacy',(_req,res)=>res.send('unchanged'));
