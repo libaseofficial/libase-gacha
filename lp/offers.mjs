@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { CREATE_DISCOUNT, FIND_DISCOUNT } from './operations.mjs';
 
 export const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
+export const OFFER_DURATION_MS = 24 * 60 * 60 * 1000;
 export const endOfJstDay = now => (Math.floor((now + 32400000) / 86400000) + 1) * 86400000 - 32400000;
 
 export class OfferError extends Error {
@@ -46,7 +47,7 @@ export function makeShopify({ shop, getAccessToken, fetcher = fetch }) {
     async find(code) { return (await graphql(FIND_DISCOUNT, { code })).codeDiscountNodeByCode?.codeDiscount || null; },
     async create(record) {
       const input = {
-        title: 'LIBASE LP限定・本日10%OFF',
+        title: 'LIBASE LP限定・24時間10%OFF',
         code: record.code, context: { all: 'ALL' },
         startsAt: new Date(Number(record.created_at)).toISOString(),
         endsAt: new Date(Number(record.ends_at)).toISOString(),
@@ -171,7 +172,7 @@ export function createOfferService(config, { store, shopify, clock = Date.now })
       validateCampaign(body);
       if (typeof body.visitorId !== 'string' || !/^[a-f0-9]{48}$/.test(body.visitorId)) throw new OfferError(400, 'Invalid visitor ID.');
       const key = keyFor(body.visitorId), now = clock();
-      const record = await store.reserve({ visitor_key: key, campaign: config.campaign, created_at: now, ends_at: endOfJstDay(now), code: `LP${digest(`code:${key}`).slice(0,24).toUpperCase()}` }, config.dailyLimit);
+      const record = await store.reserve({ visitor_key: key, campaign: config.campaign, created_at: now, ends_at: now + OFFER_DURATION_MS, code: `LP${digest(`code:${key}`).slice(0,24).toUpperCase()}` }, config.dailyLimit);
       return run(record.visitor_key, true);
     },
     async status(body) {

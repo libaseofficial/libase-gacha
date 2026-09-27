@@ -7,7 +7,7 @@ const campaign='libase-swipe-2026';
 const config={enabled:true,campaign,origin:'https://libase.shop',secret:'a'.repeat(64),dailyLimit:1000};
 const body={campaign,visitorId:'a'.repeat(48)};
 function fixture(options={}) {
- let now=Date.parse('2026-09-27T22:00:00+09:00');
+ let now=Date.parse('2026-09-27T23:30:15+09:00');
  const rows=new Map(),remote=new Map();let creates=0,failed=false;
  const store={
   async reserve(record,limit){
@@ -26,11 +26,22 @@ function fixture(options={}) {
  const service=()=>createOfferService(settings,{store,shopify,clock:()=>now});
  return {service,rows,remote,get creates(){return creates;},setNow:value=>now=Date.parse(value),advance:ms=>now+=ms};
 }
-test('same-day deadline, simultaneous claims, persisted record and next-day revisit',async()=>{
+test('24 hours from late-night first visit, concurrent claims, restart, midnight and exact expiry',async()=>{
  const f=fixture();const s=f.service();const offers=await Promise.all(Array.from({length:8},()=>s.offer(body)));
  assert.equal(f.creates,1);assert.equal(new Set(offers.map(o=>o.code)).size,1);
- const a=offers[0];assert.equal(a.scope,'all');assert.equal(a.expiresAt,'2026-09-27T15:00:00.000Z');
+ const a=offers[0];assert.equal(a.scope,'all');assert.equal(a.expiresAt,'2026-09-28T14:30:15.000Z');
  assert.equal((await f.service().status({campaign,visitorToken:a.visitorToken})).code,a.code);
+ f.setNow('2026-09-28T00:00:00+09:00');
+ const midnight=await f.service().offer(body);assert.equal(midnight.status,'active');assert.equal(midnight.expiresAt,a.expiresAt);
+ f.setNow('2026-09-28T23:30:14.999+09:00');assert.equal((await f.service().offer(body)).status,'active');
+ f.setNow('2026-09-28T23:30:15+09:00');assert.equal((await f.service().offer(body)).status,'expired');
+ f.setNow('2026-09-29T09:00:00+09:00');assert.equal((await f.service().offer(body)).status,'expired');assert.equal(f.creates,1);
+});
+
+test('pre-existing offers keep their persisted deadline and are not renewed by upgrading',async()=>{
+ const f=fixture();const s=f.service();const a=await s.offer(body);const row=[...f.rows.values()][0];
+ row.ends_at=Date.parse('2026-09-27T15:00:00Z');f.remote.get(a.code).endsAt=new Date(row.ends_at).toISOString();
+ f.advance(61000);const old=await f.service().offer(body);assert.equal(old.expiresAt,'2026-09-27T15:00:00.000Z');
  f.setNow('2026-09-28T00:00:00+09:00');assert.equal((await f.service().offer(body)).status,'expired');assert.equal(f.creates,1);
 });
 test('status cannot grant eligibility or mint coupons; forged tokens are rejected',async()=>{
